@@ -1,0 +1,10 @@
+[project]
+name = "safe-bot"
+version = "1.0.0"
+dependencies = [
+    "requests>=2.25.0"
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
