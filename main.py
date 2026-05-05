@@ -26,7 +26,7 @@ def load_data():
 
 def save_data(data):
     with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 def beijing_now():
     return datetime.now()
@@ -62,14 +62,15 @@ def daily_reset_loop():
         time.sleep(wait_seconds)
         data = load_data()
         for key in data:
-            if "state" in data[key]:
-                data[key]["state"] = None
+            data[key].pop("state", None)
+            data[key].pop("activity", None)
+            data[key].pop("act_start", None)
         save_data(data)
-        print(f"✅ 每日状态重置")
+        print(f"✅ 每日状态重置 (北京时间 {beijing_now().strftime('%H:%M:%S')})")
 
 threading.Thread(target=daily_reset_loop, daemon=True).start()
 
-print("✅ 机器人启动 | 北京时间 | 凌晨3点重置")
+print("✅ 完整版打卡机器人启动 | 北京时间 | 凌晨3点重置")
 
 last_id = 0
 
@@ -115,29 +116,36 @@ while True:
             now = beijing_now()
             ts = now.strftime("%m/%d %H:%M:%S")
 
+            # 上班
             if cmd == "上班":
                 if u.get("state") == "in_activity":
                     send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 请先【回座】结束当前活动")
                 elif u.get("state") == "working":
                     send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 已在上班中，请先下班")
                 else:
-                    u.update({"state": "working", "work_start": now.isoformat(), "上班次数": u.get("上班次数", 0) + 1})
+                    u["state"] = "working"
+                    u["work_start"] = now.isoformat()
+                    u["上班次数"] = u.get("上班次数", 0) + 1
                     db[key] = u
                     save_data(db)
                     send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 上班成功 {ts}\n第{u['上班次数']}次上班")
 
+            # 活动
             elif cmd in ["吃饭", "上厕所", "抽烟", "其他"]:
                 if u.get("state") != "working":
                     send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 请先【上班】")
-                elif u.get("activity") and u.get("state") == "in_activity":
+                elif u.get("state") == "in_activity":
                     send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 请先【回座】结束当前活动")
                 else:
-                    u.update({"state": "in_activity", "activity": cmd, "act_start": now.isoformat()})
+                    u["state"] = "in_activity"
+                    u["activity"] = cmd
+                    u["act_start"] = now.isoformat()
                     db[key] = u
                     save_data(db)
                     cnt = u.get(cmd + "次数", 0) + 1
-                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 开始{cmd} {ts}\n第{cnt}次{cmd}")
+                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 开始{cmd} {ts}\n第{cnt}次{cmd}\n\n完成后请【回座】")
 
+            # 回座
             elif cmd == "回座":
                 if u.get("state") != "in_activity":
                     send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 没有进行中的活动")
@@ -146,15 +154,16 @@ while True:
                     adur = int((now - datetime.fromisoformat(u["act_start"])).total_seconds())
                     u[act + "次数"] = u.get(act + "次数", 0) + 1
                     u["state"] = "working"
-                    u["activity"] = None
-                    u["act_start"] = None
+                    u.pop("activity", None)
+                    u.pop("act_start", None)
                     db[key] = u
                     save_data(db)
-                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 回座成功\n{act}：{fmt(adur)}\n第{u[act+'次数']}次{act}")
+                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 回座成功！\n{act}：{fmt(adur)}\n第{u[act+'次数']}次{act}")
 
+            # 下班
             elif cmd == "下班":
                 if u.get("state") not in ["working", "in_activity"]:
-                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 还没上班")
+                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 还没有上班")
                 else:
                     msgs = [f"👤 {user_name}", f"🆔 {user_id}"]
                     if u.get("state") == "in_activity":
@@ -172,6 +181,15 @@ while True:
                     save_data(db)
                     msgs.append(f"✅ 下班成功 {ts}\n本段：{fmt(wdur)}")
                     send(chat_id, "\n".join(msgs))
+
+            elif cmd == "start":
+                send(chat_id, f"📋 完整版打卡机器人\n👤 {user_name}\n🆔 {user_id}\n\n上班/下班/活动/回座\n凌晨3点重置状态")
+
+        time.sleep(0.5)
+
+    except Exception as e:
+        print(f"错误: {e}")
+        time.sleep(3)
 
             elif cmd == "start":
                 send(chat_id, f"📋 打卡机器人\n👤 {user_name}\n🆔 {user_id}")
