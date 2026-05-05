@@ -1,108 +1,14 @@
+import json
 import os
 import requests
 from datetime import datetime, timedelta
 import time
-import psycopg2
-from zoneinfo import ZoneInfo
+import threading
 
-# ---------- 北京时间 ----------
-BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+BOT_TOKEN = "13243514:3DFu4gK87ZWCPu4nWdLWY21Q4mZy2DgZZBG"
+BASE_URL = f"https://api.safew.org/bot{BOT_TOKEN}"
+DATA_FILE = "data.json"
 
-def beijing_now():
-    return datetime.now(BEIJING_TZ)
-
-# ---------- 数据库 ----------
-def get_db():
-    return psycopg2.connect(
-        host=os.environ['PGHOST'],
-        database=os.environ['PGDATABASE'],
-        user=os.environ['PGUSER'],
-        password=os.environ['PGPASSWORD']
-    )
-
-def init_db():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS user_state (
-            key TEXT PRIMARY KEY,
-            state TEXT,
-            activity TEXT,
-            act_start TEXT,
-            work_start TEXT,
-            上班次数 INTEGER DEFAULT 0,
-            下班次数 INTEGER DEFAULT 0,
-            吃饭次数 INTEGER DEFAULT 0,
-            上厕所次数 INTEGER DEFAULT 0,
-            抽烟次数 INTEGER DEFAULT 0,
-            其他次数 INTEGER DEFAULT 0,
-            总工作时长 INTEGER DEFAULT 0
-        )
-    ''')
-    conn.commit()
-    cur.close()
-    conn.close()
-
-def load_user(key):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute('SELECT * FROM user_state WHERE key = %s', (key,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    if not row:
-        return {}
-    return {
-        'state': row[1],
-        'activity': row[2],
-        'act_start': row[3],
-        'work_start': row[4],
-        '上班次数': row[5],
-        '下班次数': row[6],
-        '吃饭次数': row[7],
-        '上厕所次数': row[8],
-        '抽烟次数': row[9],
-        '其他次数': row[10],
-        '总工作时长': row[11]
-    }
-
-def save_user(key, data):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute('''
-        INSERT INTO user_state (key, state, activity, act_start, work_start, 上班次数, 下班次数, 吃饭次数, 上厕所次数, 抽烟次数, 其他次数, 总工作时长)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT(key) DO UPDATE SET
-            state = EXCLUDED.state,
-            activity = EXCLUDED.activity,
-            act_start = EXCLUDED.act_start,
-            work_start = EXCLUDED.work_start,
-            上班次数 = EXCLUDED.上班次数,
-            下班次数 = EXCLUDED.下班次数,
-            吃饭次数 = EXCLUDED.吃饭次数,
-            上厕所次数 = EXCLUDED.上厕所次数,
-            抽烟次数 = EXCLUDED.抽烟次数,
-            其他次数 = EXCLUDED.其他次数,
-            总工作时长 = EXCLUDED.总工作时长
-    ''', (
-        key,
-        data.get('state'),
-        data.get('activity'),
-        data.get('act_start'),
-        data.get('work_start'),
-        data.get('上班次数', 0),
-        data.get('下班次数', 0),
-        data.get('吃饭次数', 0),
-        data.get('上厕所次数', 0),
-        data.get('抽烟次数', 0),
-        data.get('其他次数', 0),
-        data.get('总工作时长', 0)
-    ))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-# ---------- 键盘 ----------
 KEYBOARD = {
     "keyboard": [
         ["上班", "下班"],
@@ -112,9 +18,18 @@ KEYBOARD = {
     "resize_keyboard": True
 }
 
-# ---------- Bot 配置 ----------
-BOT_TOKEN = "13243514:3DFu4gK87ZWCPu4nWdLWY21Q4mZy2DgZZBG"
-BASE_URL = f"https://api.safew.org/bot{BOT_TOKEN}"
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f)
+
+def beijing_now():
+    return datetime.now()
 
 def send(chat_id, text):
     try:
@@ -137,42 +52,24 @@ def fmt(t):
     m, s = divmod(t, 60)
     return f"{m}分{s}秒"
 
-# ---------- 每天凌晨 3:00 重置 ----------
 def daily_reset_loop():
     while True:
         now = beijing_now()
-        # 下一个凌晨 3:00
         next_reset = now.replace(hour=3, minute=0, second=0, microsecond=0)
         if now >= next_reset:
             next_reset += timedelta(days=1)
-
         wait_seconds = (next_reset - now).total_seconds()
-        print(f"⏰ 距离下次状态重置还有 {wait_seconds/3600:.1f} 小时 (北京时间 {next_reset.strftime('%H:%M')})")
-
         time.sleep(wait_seconds)
+        data = load_data()
+        for key in data:
+            if "state" in data[key]:
+                data[key]["state"] = None
+        save_data(data)
+        print(f"✅ 每日状态重置")
 
-        # 重置所有用户状态（只清空 state / activity / act_start）
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute('''
-            UPDATE user_state
-            SET state = NULL,
-                activity = NULL,
-                act_start = NULL
-        ''')
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        print(f"✅ 每日状态重置完成 (北京时间 {beijing_now().strftime('%Y-%m-%d %H:%M:%S')})")
-
-# 启动重置线程
-import threading
 threading.Thread(target=daily_reset_loop, daemon=True).start()
 
-# ---------- 启动机器人 ----------
-init_db()
-print("✅ 机器人启动 (北京时间 + 凌晨3点重置状态)")
+print("✅ 机器人启动 | 北京时间 | 凌晨3点重置")
 
 last_id = 0
 
@@ -213,20 +110,48 @@ while True:
                 continue
 
             key = get_key(chat_id, user_id)
-            u = load_user(key)
+            db = load_data()
+            u = db.get(key, {})
             now = beijing_now()
             ts = now.strftime("%m/%d %H:%M:%S")
 
-            # 上班
             if cmd == "上班":
-                if u.get("state") in ["working", "in_activity"]:
-                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 已在上班中")
+                if u.get("state") == "in_activity":
+                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 请先【回座】结束当前活动")
+                elif u.get("state") == "working":
+                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 已在上班中，请先下班")
                 else:
                     u.update({"state": "working", "work_start": now.isoformat(), "上班次数": u.get("上班次数", 0) + 1})
-                    save_user(key, u)
+                    db[key] = u
+                    save_data(db)
                     send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 上班成功 {ts}\n第{u['上班次数']}次上班")
 
-            # 下班
+            elif cmd in ["吃饭", "上厕所", "抽烟", "其他"]:
+                if u.get("state") != "working":
+                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 请先【上班】")
+                elif u.get("activity") and u.get("state") == "in_activity":
+                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 请先【回座】结束当前活动")
+                else:
+                    u.update({"state": "in_activity", "activity": cmd, "act_start": now.isoformat()})
+                    db[key] = u
+                    save_data(db)
+                    cnt = u.get(cmd + "次数", 0) + 1
+                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 开始{cmd} {ts}\n第{cnt}次{cmd}")
+
+            elif cmd == "回座":
+                if u.get("state") != "in_activity":
+                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 没有进行中的活动")
+                else:
+                    act = u.get("activity")
+                    adur = int((now - datetime.fromisoformat(u["act_start"])).total_seconds())
+                    u[act + "次数"] = u.get(act + "次数", 0) + 1
+                    u["state"] = "working"
+                    u["activity"] = None
+                    u["act_start"] = None
+                    db[key] = u
+                    save_data(db)
+                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 回座成功\n{act}：{fmt(adur)}\n第{u[act+'次数']}次{act}")
+
             elif cmd == "下班":
                 if u.get("state") not in ["working", "in_activity"]:
                     send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 还没上班")
@@ -241,37 +166,18 @@ while True:
                     u["总工作时长"] = u.get("总工作时长", 0) + wdur
                     u["下班次数"] = u.get("下班次数", 0) + 1
                     u.pop("state", None)
-                    save_user(key, u)
+                    u.pop("activity", None)
+                    u.pop("act_start", None)
+                    db[key] = u
+                    save_data(db)
                     msgs.append(f"✅ 下班成功 {ts}\n本段：{fmt(wdur)}")
                     send(chat_id, "\n".join(msgs))
 
-            # 活动
-            elif cmd in ["吃饭", "上厕所", "抽烟", "其他"]:
-                if u.get("state") != "working":
-                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 请先【上班】")
-                else:
-                    u.update({"state": "in_activity", "activity": cmd, "act_start": now.isoformat()})
-                    save_user(key, u)
-                    cnt = u.get(cmd + "次数", 0) + 1
-                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 开始{cmd} {ts}\n第{cnt}次{cmd}\n\n完成后请【回座】")
-
-            # 回座
-            elif cmd == "回座":
-                if u.get("state") != "in_activity":
-                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 没有进行中的活动")
-                else:
-                    act = u.get("activity")
-                    adur = int((now - datetime.fromisoformat(u["act_start"])).total_seconds())
-                    u[act + "次数"] = u.get(act + "次数", 0) + 1
-                    u["state"] = "working"
-                    save_user(key, u)
-                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 回座成功！\n{act}：{fmt(adur)}\n第{u[act+'次数']}次{act}")
-
             elif cmd == "start":
-                send(chat_id, f"📋 打卡机器人 (北京时间 + 凌晨3点重置)\n👤 {user_name}\n🆔 {user_id}")
+                send(chat_id, f"📋 打卡机器人\n👤 {user_name}\n🆔 {user_id}")
 
         time.sleep(0.5)
 
     except Exception as e:
-        print("错误:", e)
+        print(f"错误: {e}")
         time.sleep(3)
