@@ -37,7 +37,7 @@ def send(chat_id, text, show_keyboard=False):
     try:
         url = f"{BASE_URL}/sendMessage"
         payload = {"chat_id": chat_id, "text": text, "disable_notification": True}
-        if show_keyboard or "📋" in text:
+        if show_keyboard:
             payload["reply_markup"] = KEYBOARD
         requests.post(url, json=payload, timeout=5)
     except:
@@ -74,27 +74,30 @@ def daily_reset_loop():
 
 threading.Thread(target=daily_reset_loop, daemon=True).start()
 
-# ========== 强制设置所有人上班 ==========
-print("🔧 正在检查并修复用户状态...")
-data = load_data()
-fixed_count = 0
-for key in data:
-    if data[key].get("state") != "working":
-        data[key]["state"] = "working"
-        fixed_count += 1
-if fixed_count > 0:
-    save_data(data)
-    print(f"✅ 已将 {fixed_count} 个用户状态设为上班中")
+# ========== 5月6日强制上班补丁 ==========
+today = beijing_now().strftime("%Y-%m-%d")
+if today == "2026-05-06":
+    print("🔧 今天是5月6日，正在强制设置所有人上班状态...")
+    data = load_data()
+    fixed_count = 0
+    for key in data:
+        if data[key].get("state") != "working":
+            data[key]["state"] = "working"
+            fixed_count += 1
+    if fixed_count > 0:
+        save_data(data)
+        print(f"✅ 已将 {fixed_count} 个用户状态设为上班中（仅今天生效）")
+    else:
+        print("✅ 所有用户已是上班状态")
+    print("📌 提示：从明天(5月7日)开始，需要手动打卡上班")
 else:
-    print("✅ 所有用户已是上班状态")
-# ====================================
+    print("✅ 正常模式：需要手动打卡上班")
+# ========================================
 
 print("✅ 机器人启动 | 北京时间 | 凌晨3点重置状态")
 
 last_id = 0
-
-# 记录已发送过键盘的用户，避免重复发送
-keyboard_sent = set()
+keyboard_activated = set()
 
 while True:
     try:
@@ -118,13 +121,15 @@ while True:
             user_id = str(msg["from"]["id"])
             user_name = msg["from"].get("first_name", "") or str(user_id)
             raw = msg.get("text", "").strip()
+            is_group = chat_id < 0
+            chat_type = "群聊" if is_group else "私聊"
 
-            # 自动激活键盘：如果是第一次发消息，自动回复键盘
-            if chat_id not in keyboard_sent:
-                keyboard_sent.add(chat_id)
-                welcome_text = f"📋 打卡机器人已启动\n👤 用户：{user_name}\n🆔 标识：{user_id}\n\n请直接点击按钮打卡"
+            # 键盘激活
+            if chat_id not in keyboard_activated:
+                keyboard_activated.add(chat_id)
+                welcome_text = f"📋 打卡机器人已激活\n📍 模式：{chat_type}\n\n✅ 支持点击按钮打卡\n✅ 也支持打字命令：上/下/回/吃/厕/抽/其"
                 send(chat_id, welcome_text, show_keyboard=True)
-                # 继续处理，不跳过
+                print(f"✅ 已在 {chat_type} 中激活键盘面板")
 
             cmd = None
             if raw in ["上", "上班"]:
@@ -215,7 +220,7 @@ while True:
                     send(chat_id, "\n".join(msgs), show_keyboard=True)
 
             elif cmd == "start":
-                send(chat_id, f"📋 打卡机器人\n👤 用户：{user_name}\n🆔 标识：{user_id}\n\n请直接点击按钮打卡", show_keyboard=True)
+                send(chat_id, f"📋 打卡机器人\n👤 用户：{user_name}\n🆔 标识：{user_id}\n\n✅ 支持点击按钮打卡\n✅ 也支持打字命令：上/下/回/吃/厕/抽/其", show_keyboard=True)
 
         time.sleep(0.5)
 
