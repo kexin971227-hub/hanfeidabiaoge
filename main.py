@@ -108,13 +108,13 @@ while True:
                 cmd = "上班"
             elif raw in ["下", "下班"]:
                 cmd = "下班"
-            elif raw in ["回", "回座"]:
+            elif raw in ["回", ,"回座"]:
                 cmd = "回座"
-            elif raw in ["吃", "吃饭"]:
+            elif raw in ["吃", "cf","吃饭"]:
                 cmd = "吃饭"
-            elif raw in ["厕", "上厕所"]:
+            elif raw in ["厕", "厕所","cs","上厕所"]:
                 cmd = "上厕所"
-            elif raw in ["抽", "抽烟"]:
+            elif raw in ["抽","cy", "抽烟"]:
                 cmd = "抽烟"
             elif raw in ["其", "其他"]:
                 cmd = "其他"
