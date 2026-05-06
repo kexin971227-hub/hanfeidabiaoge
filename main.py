@@ -33,11 +33,11 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def send(chat_id, text):
+def send(chat_id, text, show_keyboard=False):
     try:
         url = f"{BASE_URL}/sendMessage"
         payload = {"chat_id": chat_id, "text": text, "disable_notification": True}
-        if "📋" in text:
+        if show_keyboard or "📋" in text:
             payload["reply_markup"] = KEYBOARD
         requests.post(url, json=payload, timeout=5)
     except:
@@ -93,6 +93,9 @@ print("✅ 机器人启动 | 北京时间 | 凌晨3点重置状态")
 
 last_id = 0
 
+# 记录已发送过键盘的用户，避免重复发送
+keyboard_sent = set()
+
 while True:
     try:
         resp = requests.get(f"{BASE_URL}/getUpdates", params={"offset": last_id + 1, "timeout": 20})
@@ -115,6 +118,13 @@ while True:
             user_id = str(msg["from"]["id"])
             user_name = msg["from"].get("first_name", "") or str(user_id)
             raw = msg.get("text", "").strip()
+
+            # 自动激活键盘：如果是第一次发消息，自动回复键盘
+            if chat_id not in keyboard_sent:
+                keyboard_sent.add(chat_id)
+                welcome_text = f"📋 打卡机器人已启动\n👤 用户：{user_name}\n🆔 标识：{user_id}\n\n请直接点击按钮打卡"
+                send(chat_id, welcome_text, show_keyboard=True)
+                # 继续处理，不跳过
 
             cmd = None
             if raw in ["上", "上班"]:
@@ -144,22 +154,22 @@ while True:
 
             if cmd == "上班":
                 if u.get("state") == "in_activity":
-                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n❌ 请先【回座】")
+                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n❌ 请先【回座】", show_keyboard=True)
                 elif u.get("state") == "working":
-                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n❌ 已在上班中")
+                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n❌ 已在上班中", show_keyboard=True)
                 else:
                     u["state"] = "working"
                     u["work_start"] = now.isoformat()
                     u["上班次数"] = u.get("上班次数", 0) + 1
                     db[key] = u
                     save_data(db)
-                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n✅ 上班成功 {ts}\n第{u['上班次数']}次上班")
+                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n✅ 上班成功 {ts}\n第{u['上班次数']}次上班", show_keyboard=True)
 
             elif cmd in ["吃饭", "上厕所", "抽烟", "其他"]:
                 if u.get("state") != "working":
-                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n❌ 请先【上班】")
+                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n❌ 请先【上班】", show_keyboard=True)
                 elif u.get("state") == "in_activity":
-                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n❌ 请先【回座】")
+                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n❌ 请先【回座】", show_keyboard=True)
                 else:
                     u["state"] = "in_activity"
                     u["activity"] = cmd
@@ -167,11 +177,11 @@ while True:
                     db[key] = u
                     save_data(db)
                     cnt = u.get(cmd + "次数", 0) + 1
-                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n✅ 开始{cmd} {ts}\n第{cnt}次{cmd}")
+                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n✅ 开始{cmd} {ts}\n第{cnt}次{cmd}\n\n完成后请【回座】", show_keyboard=True)
 
             elif cmd == "回座":
                 if u.get("state") != "in_activity":
-                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n❌ 没有进行中的活动")
+                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n❌ 没有进行中的活动", show_keyboard=True)
                 else:
                     act = u.get("activity")
                     adur = int((now - datetime.fromisoformat(u["act_start"])).total_seconds())
@@ -181,11 +191,11 @@ while True:
                     u.pop("act_start", None)
                     db[key] = u
                     save_data(db)
-                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n✅ 回座成功\n{act}：{fmt(adur)}\n第{u[act+'次数']}次{act}")
+                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n✅ 回座成功\n{act}：{fmt(adur)}\n第{u[act+'次数']}次{act}", show_keyboard=True)
 
             elif cmd == "下班":
                 if u.get("state") not in ["working", "in_activity"]:
-                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n❌ 还没上班")
+                    send(chat_id, f"👤 用户：{user_name}\n🆔 标识：{user_id}\n❌ 还没上班", show_keyboard=True)
                 else:
                     msgs = [f"👤 用户：{user_name}", f"🆔 标识：{user_id}"]
                     if u.get("state") == "in_activity":
@@ -202,10 +212,10 @@ while True:
                     db[key] = u
                     save_data(db)
                     msgs.append(f"✅ 下班成功 {ts}\n本段：{fmt(wdur)}")
-                    send(chat_id, "\n".join(msgs))
+                    send(chat_id, "\n".join(msgs), show_keyboard=True)
 
             elif cmd == "start":
-                send(chat_id, f"📋 打卡机器人\n👤 用户：{user_name}\n🆔 标识：{user_id}\n\n上班/下班/活动/回座\n凌晨3点重置")
+                send(chat_id, f"📋 打卡机器人\n👤 用户：{user_name}\n🆔 标识：{user_id}\n\n请直接点击按钮打卡", show_keyboard=True)
 
         time.sleep(0.5)
 
