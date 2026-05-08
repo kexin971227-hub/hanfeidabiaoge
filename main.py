@@ -1,11 +1,12 @@
 import json
 import os
 import requests
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import time
 import threading
+from zoneinfo import ZoneInfo
 
-BEIJING_TZ = timezone(timedelta(hours=8))
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
 def beijing_now():
     return datetime.now(BEIJING_TZ)
@@ -26,24 +27,65 @@ KEYBOARD = {
 
 EXCLUDE_NAMES = ["Ellen匪", "表", "雨夜带刀不带伞", "红牛", "二东"]
 
-# ========== 兼容旧数据 ==========
-def migrate_old_data():
-    if not os.path.exists(DATA_FILE):
-        return
-    with open(DATA_FILE, "r") as f:
-        data = json.load(f)
-    updated = False
-    for key, val in data.items():
-        if isinstance(val, dict) and "上班次数" not in val and "state" in val:
-            # 旧结构修复
-            val["上班次数"] = val.get("count", 0)
-            updated = True
-    if updated:
-        with open(DATA_FILE, "w") as f:
-            json.dump(data, f, indent=2)
-        print("✅ 已自动兼容旧打卡数据")
+FIXED_ID_NAME_MAP = {
+    "13234945": "甄子丹",
+    "13198655": "2胖",
+    "13198739": "胖胖",
+    "13233106": "南",
+    "13198523": "振亮",
+    "13235100": "路克",
+    "13232984": "蓝心羽",
+    "13198841": "小二",
+    "13200020": "罗杰",
+    "13198171": "九",
+    "13235012": "冰岛",
+    "13235185": "招财",
+    "13235219": "林强",
+    "13199957": "安仔",
+    "10515461": "阿乐",
+    "13234881": "阿火",
+    "13234715": "小涛",
+    "13234840": "小康",
+    "13233117": "毛毛",
+    "13233739": "阿超",
+    "13233506": "舒克",
+    "13234468": "晴天",
+    "13232797": "大力出奇迹",
+    "13198948": "阿鬼",
+    "13234476": "老二",
+    "13233448": "啊朕",
+    "13198685": "星辰",
+    "13232756": "阿飞",
+    "13235403": "小飞",
+    "13234669": "南宫",
+    "13233303": "大蛇",
+    "13234569": "小明"
+}
 
-migrate_old_data()
+DYNAMIC_ID_NAME_MAP = {}
+
+def get_full_name_map():
+    full = FIXED_ID_NAME_MAP.copy()
+    full.update(DYNAMIC_ID_NAME_MAP)
+    return full
+
+def load_dynamic_map():
+    global DYNAMIC_ID_NAME_MAP
+    if os.path.exists("dynamic_map.json"):
+        with open("dynamic_map.json", "r") as f:
+            DYNAMIC_ID_NAME_MAP = json.load(f)
+
+def save_dynamic_map():
+    with open("dynamic_map.json", "w") as f:
+        json.dump(DYNAMIC_ID_NAME_MAP, f, ensure_ascii=False, indent=2)
+
+load_dynamic_map()
+
+def record_new_user(user_id, user_name):
+    if user_id not in FIXED_ID_NAME_MAP and user_id not in DYNAMIC_ID_NAME_MAP:
+        DYNAMIC_ID_NAME_MAP[user_id] = user_name
+        save_dynamic_map()
+        print(f"📝 记录新用户: {user_name} ({user_id})")
 
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -73,60 +115,40 @@ def get_key(chat_id, user_id):
 def fmt(t):
     if t < 60:
         return f"{t}秒"
-    m, s = divmod(t, 60)
-    return f"{m}分{s}秒"
+    return f"{t//60}分{t%60}秒"
 
-name_id_map = {}
-id_name_map = {}
-MAP_FILE = "name_id_map.json"
-
-def load_name_map():
-    global name_id_map, id_name_map
-    if os.path.exists(MAP_FILE):
-        with open(MAP_FILE, "r") as f:
-            d = json.load(f)
-            name_id_map = d.get("name_to_id", {})
-            id_name_map = d.get("id_to_name", {})
-
-def save_name_map():
-    with open(MAP_FILE, "w") as f:
-        json.dump({"name_to_id": name_id_map, "id_to_name": id_name_map}, f, ensure_ascii=False, indent=2)
-
-def update_user(user_id, user_name):
-    if user_id not in id_name_map:
-        id_name_map[user_id] = user_name
-        name_id_map[user_name] = user_id
-        save_name_map()
-        print(f"📝 记录新用户: {user_name} ({user_id})")
-
-load_name_map()
-
+# ========== 每天 9:10 考勤统计 ==========
 def send_daily_report():
     data = load_data()
     today = beijing_now().strftime("%Y-%m-%d")
+    now_time = beijing_now().strftime("%H:%M")
+
     checked_ids = set()
     for key, val in data.items():
         if key.startswith("group_") and val.get("上班次数", 0) > 0:
             uid = key.split("_")[-1]
             checked_ids.add(uid)
 
+    full_map = get_full_name_map()
     checked_names = []
-    not_checked_names = []
-    for uid, name in id_name_map.items():
+    late_names = []
+
+    for uid, name in full_map.items():
         if name in EXCLUDE_NAMES:
             continue
         if uid in checked_ids:
             checked_names.append(name)
         else:
-            not_checked_names.append(name)
+            late_names.append(name)
 
-    total = len(checked_names) + len(not_checked_names)
-    msg = f"📊 今日打卡统计 ({today})\n"
-    msg += f"👥 应上班人数：{total} 人\n"
-    msg += f"✅ 实际上班人数：{len(checked_names)} 人\n\n"
+    total = len(checked_names) + len(late_names)
+    msg = f"📊 今日考勤统计 ({today} {now_time})\n"
+    msg += f"👥 应到人数：{total} 人\n"
+    msg += f"✅ 实到人数：{len(checked_names)} 人\n\n"
     msg += f"✅ 已打卡名单：\n" + ("、".join(checked_names) if checked_names else "无") + "\n\n"
-    msg += f"❌ 未打卡名单：\n" + ("、".join(not_checked_names) if not_checked_names else "无")
+    msg += f"❌ 迟到/未打卡名单：\n" + ("、".join(late_names) if late_names else "无")
     send(GROUP_ID, msg, show_keyboard=False)
+    print("✅ 已发送考勤统计")
 
 def daily_report_loop():
     while True:
@@ -135,10 +157,11 @@ def daily_report_loop():
         if now >= next_run:
             next_run += timedelta(days=1)
         wait_seconds = (next_run - now).total_seconds()
-        print(f"📊 下次打卡统计时间: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"📊 下次考勤统计时间: {next_run.strftime('%H:%M:%S')}")
         time.sleep(wait_seconds)
         send_daily_report()
 
+# ========== 每天 3:00 彻底清零 ==========
 def daily_reset_loop():
     while True:
         now = beijing_now()
@@ -146,20 +169,15 @@ def daily_reset_loop():
         if now >= next_reset:
             next_reset += timedelta(days=1)
         wait_seconds = (next_reset - now).total_seconds()
-        print(f"⏰ 距离下次状态重置还有 {wait_seconds/3600:.1f} 小时")
+        print(f"⏰ 距离下次数据重置还有 {wait_seconds/3600:.1f} 小时")
         time.sleep(wait_seconds)
-        data = load_data()
-        for key in data:
-            data[key].pop("state", None)
-            data[key].pop("activity", None)
-            data[key].pop("act_start", None)
-        save_data(data)
-        print(f"✅ 每日状态重置完成")
+        save_data({})
+        print(f"✅ 每日考勤数据重置完成 (北京时间 {beijing_now().strftime('%Y-%m-%d %H:%M:%S')})")
 
 threading.Thread(target=daily_reset_loop, daemon=True).start()
 threading.Thread(target=daily_report_loop, daemon=True).start()
 
-print("✅ 机器人启动 | 兼容旧数据 | 每天3点重置 | 每天9:10统计")
+print("✅ 考勤机器人启动 | 迟到标注版 | 每天3点清零 | 每天9:10统计")
 
 last_id = 0
 keyboard_activated = set()
@@ -187,11 +205,11 @@ while True:
             user_name = msg["from"].get("first_name", "") or msg["from"].get("username", "") or str(user_id)
             raw = msg.get("text", "").strip()
 
-            update_user(user_id, user_name)
+            record_new_user(user_id, user_name)
 
             if chat_id not in keyboard_activated:
                 keyboard_activated.add(chat_id)
-                send(chat_id, "📋 打卡机器人已激活\n命令：上/下/回/吃/厕/抽/其", show_keyboard=True)
+                send(chat_id, "📋 考勤机器人已激活\n命令：上(上班) 下(下班) 回(回座)\n活动：吃/厕/抽/其", show_keyboard=True)
 
             key = get_key(chat_id, user_id)
             db = load_data()
@@ -202,7 +220,6 @@ while True:
             u = db.get(key, {})
             now = beijing_now()
             ts = now.strftime("%m/%d %H:%M:%S")
-
             cmd = None
             if raw in ["上", "上班"]:
                 cmd = "上班"
@@ -288,7 +305,7 @@ while True:
                     send(chat_id, "\n".join(msgs), show_keyboard=True)
 
             elif cmd == "start":
-                send(chat_id, f"📋 打卡机器人\n👤 {user_name}\n🆔 {user_id}\n每天9:10统计", show_keyboard=True)
+                send(chat_id, f"📋 考勤机器人\n👤 {user_name}\n🆔 {user_id}\n每天9:10考勤统计", show_keyboard=True)
 
         time.sleep(0.5)
 
