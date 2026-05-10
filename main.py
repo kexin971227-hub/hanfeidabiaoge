@@ -26,7 +26,6 @@ KEYBOARD = {
     "resize_keyboard": True
 }
 
-# 排除名单（不计入考勤）
 EXCLUDE_NAMES = ["Ellen匪", "表", "雨夜带刀不带伞", "红牛", "二东", "阿航"]
 
 FIXED_ID_NAME_MAP = {
@@ -106,42 +105,14 @@ def add_group(group_id):
         save_groups(groups)
         print(f"📌 自动记录群组: {group_id}")
 
-def auto_fix_data():
-    if not os.path.exists(DATA_FILE):
-        return
-    with open(DATA_FILE, 'r') as f:
-        data = json.load(f)
-    new_data = {}
-    fixed = 0
-    for key, val in data.items():
-        parts = key.split('_')
-        uid = None
-        if key.startswith('private_') and len(parts) >= 2:
-            uid = parts[1]
-        elif key.startswith('group_') and len(parts) >= 3:
-            uid = parts[-1]
-        if uid and uid.isdigit():
-            new_key = f'group_{GROUP_ID}_{uid}'
-            new_data[new_key] = val
-            if key != new_key:
-                fixed += 1
-                print(f'🔧 修复: {key} -> {new_key}')
-        else:
-            new_data[key] = val
-    if fixed > 0:
-        with open(DATA_FILE, 'w') as f:
-            json.dump(new_data, f, indent=2)
-        print(f'✅ 自动修复完成，共修复 {fixed} 条记录')
-
 def load_data():
-    auto_fix_data()
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, 'r') as f:
+        with open(DATA_FILE, "r") as f:
             return json.load(f)
     return {}
 
 def save_data(data):
-    with open(DATA_FILE, 'w') as f:
+    with open(DATA_FILE, "w") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 def send(chat_id, text, show_keyboard=False):
@@ -151,8 +122,8 @@ def send(chat_id, text, show_keyboard=False):
         if show_keyboard:
             payload["reply_markup"] = KEYBOARD
         requests.post(url, json=payload, timeout=5)
-    except:
-        pass
+    except Exception as e:
+        print(f"发送失败: {e}")
 
 def get_key(chat_id, user_id):
     if chat_id < 0:
@@ -164,22 +135,20 @@ def fmt(t):
         return f"{t}秒"
     return f"{t//60}分{t%60}秒"
 
-# ========== 考勤统计核心逻辑 ==========
 def get_report_for_group(group_id):
     data = load_data()
     now = beijing_now()
     today = now.strftime("%Y-%m-%d")
     report_time = now.strftime("%H:%M")
-    weekday = now.weekday()  # 0=周一, 6=周日
+    weekday = now.weekday()
 
-    # 判定迟到的时间阈值
-    if weekday == 6:  # 周日
+    if weekday == 6:
         deadline = now.replace(hour=12, minute=0, second=0, microsecond=0)
-    else:  # 周一至周六
+    else:
         deadline = now.replace(hour=9, minute=0, second=0, microsecond=0)
 
     prefix = f"group_{abs(group_id)}_"
-    checked_users = {}  # uid -> 打卡时间
+    checked_users = {}
 
     for key, val in data.items():
         if key.startswith(prefix) and val.get("上班次数", 0) > 0:
@@ -192,12 +161,12 @@ def get_report_for_group(group_id):
                         check_time = check_time.replace(tzinfo=BEIJING_TZ)
                     checked_users[uid] = check_time
                 except:
-                    checked_users[uid] = deadline  # 容错：无法解析时间则视为准时
+                    checked_users[uid] = deadline
 
     full_map = get_full_name_map()
-    on_time_list = []   # 准时
-    late_list = []      # 迟到
-    absent_list = []    # 缺勤
+    on_time_list = []
+    late_list = []
+    absent_list = []
 
     for uid, name in full_map.items():
         if name in EXCLUDE_NAMES:
@@ -213,7 +182,6 @@ def get_report_for_group(group_id):
 
     total = len(on_time_list) + len(late_list) + len(absent_list)
 
-    # 构建消息
     msg = f"📊 今日考勤统计 ({today} {report_time})\n"
     msg += f"👥 应到人数：{total} 人\n"
     msg += f"✅ 实到人数：{len(on_time_list) + len(late_list)} 人\n\n"
@@ -246,7 +214,7 @@ def daily_reset_loop():
 
 threading.Thread(target=daily_reset_loop, daemon=True).start()
 
-print("✅ 考勤机器人启动 | 每天3点清零 | 已部署完整考勤规则")
+print("✅ 考勤机器人启动 | 每天3点清零 | 自动记录群 | 完整考勤规则")
 
 last_id = 0
 keyboard_activated = set()
@@ -255,9 +223,9 @@ def scheduler():
     while True:
         now = beijing_now()
         weekday = now.weekday()
-        if weekday == 6:  # 周日
+        if weekday == 6:
             target_hour, target_minute = 12, 10
-        else:  # 周一至周六
+        else:
             target_hour, target_minute = 9, 10
         next_run = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
         if now >= next_run:
@@ -414,7 +382,7 @@ while True:
                     send(chat_id, "\n".join(msgs), show_keyboard=True)
 
             elif cmd == "start":
-                send(chat_id, f"📋 考勤机器人\n👤 {user_name}\n🆔 {user_id}\n考勤规则：周一至周六9:00前为准时，周日12:00前为准时", show_keyboard=True)
+                send(chat_id, f"📋 考勤机器人\n👤 {user_name}\n🆔 {user_id}\n周一至周六9:00前准时，周日12:00前准时", show_keyboard=True)
 
         time.sleep(0.5)
 
