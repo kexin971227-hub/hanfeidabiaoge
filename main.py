@@ -14,7 +14,8 @@ def beijing_now():
 BOT_TOKEN = "13243514:3DFu4gK87ZWCPu4nWdLWY21Q4mZy2DgZZBG"
 BASE_URL = f"https://api.safew.org/bot{BOT_TOKEN}"
 DATA_FILE = "data.json"
-GROUPS_FILE = "groups.json"
+
+# 群 ID（直接硬编码，再也不需要 groups.json）
 GROUP_ID = 10000602092
 
 KEYBOARD = {
@@ -88,23 +89,6 @@ def record_new_user(user_id, user_name):
         save_dynamic_map()
         print(f"📝 记录新用户: {user_name} ({user_id})")
 
-def load_groups():
-    if os.path.exists(GROUPS_FILE):
-        with open(GROUPS_FILE, "r") as f:
-            return set(json.load(f))
-    return set()
-
-def save_groups(groups):
-    with open(GROUPS_FILE, "w") as f:
-        json.dump(list(groups), f)
-
-def add_group(group_id):
-    groups = load_groups()
-    if group_id not in groups:
-        groups.add(group_id)
-        save_groups(groups)
-        print(f"📌 自动记录群组: {group_id}")
-
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
@@ -122,8 +106,8 @@ def send(chat_id, text, show_keyboard=False):
         if show_keyboard:
             payload["reply_markup"] = KEYBOARD
         requests.post(url, json=payload, timeout=5)
-    except Exception as e:
-        print(f"发送失败: {e}")
+    except:
+        pass
 
 def get_key(chat_id, user_id):
     if chat_id < 0:
@@ -135,7 +119,7 @@ def fmt(t):
         return f"{t}秒"
     return f"{t//60}分{t%60}秒"
 
-def get_report_for_group(group_id):
+def get_report():
     data = load_data()
     now = beijing_now()
     today = now.strftime("%Y-%m-%d")
@@ -147,7 +131,7 @@ def get_report_for_group(group_id):
     else:
         deadline = now.replace(hour=9, minute=0, second=0, microsecond=0)
 
-    prefix = f"group_{abs(group_id)}_"
+    prefix = f"group_{GROUP_ID}_"
     checked_users = {}
 
     for key, val in data.items():
@@ -181,7 +165,6 @@ def get_report_for_group(group_id):
             absent_list.append(name)
 
     total = len(on_time_list) + len(late_list) + len(absent_list)
-
     msg = f"📊 今日考勤统计 ({today} {report_time})\n"
     msg += f"👥 应到人数：{total} 人\n"
     msg += f"✅ 实到人数：{len(on_time_list) + len(late_list)} 人\n\n"
@@ -190,13 +173,13 @@ def get_report_for_group(group_id):
     msg += f"❌ 缺勤 ({len(absent_list)}人)：\n" + ("、".join(absent_list) if absent_list else "无")
     return msg
 
-def send_report_to_group(group_id):
-    msg = get_report_for_group(group_id)
-    send(group_id, msg, show_keyboard=False)
-    print(f"✅ 已发送考勤统计到群组 {group_id}")
+def send_report_to_group():
+    msg = get_report()
+    send(GROUP_ID, msg, show_keyboard=False)
+    print(f"✅ 已发送考勤统计到群组 {GROUP_ID}")
 
-def send_report_to_chat(chat_id, group_id):
-    msg = get_report_for_group(group_id)
+def send_report_to_chat(chat_id):
+    msg = get_report()
     send(chat_id, msg, show_keyboard=False)
     print(f"✅ 已发送考勤统计到 {chat_id}")
 
@@ -214,7 +197,7 @@ def daily_reset_loop():
 
 threading.Thread(target=daily_reset_loop, daemon=True).start()
 
-print("✅ 考勤机器人启动 | 每天3点清零 | 自动记录群 | 完整考勤规则")
+print("✅ 考勤机器人启动 | 每天3点清零 | 群ID硬编码 | 定时发送统计")
 
 last_id = 0
 keyboard_activated = set()
@@ -227,19 +210,15 @@ def scheduler():
             target_hour, target_minute = 12, 10
         else:
             target_hour, target_minute = 9, 10
-        next_run = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
-        if now >= next_run:
-            next_run += timedelta(days=1)
-        wait_seconds = (next_run - now).total_seconds()
-        print(f"📊 下次考勤统计时间: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
-        time.sleep(wait_seconds)
 
-        groups = load_groups()
-        if not groups:
-            print("⚠️ 尚未记录任何群组，不发送统计")
-        else:
-            for gid in groups:
-                send_report_to_group(gid)
+        target_time = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+        if now >= target_time:
+            target_time += timedelta(days=1)
+
+        wait_seconds = (target_time - now).total_seconds()
+        print(f"📊 下次考勤统计时间: {target_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        time.sleep(wait_seconds)
+        send_report_to_group()
 
 threading.Thread(target=scheduler, daemon=True).start()
 
@@ -268,7 +247,7 @@ while True:
             raw = msg.get("text", "").strip()
 
             if is_group:
-                add_group(chat_id)
+                print(f"📌 收到群消息，群ID: {chat_id}")
 
             record_new_user(user_id, user_name)
 
@@ -288,14 +267,7 @@ while True:
             cmd = None
 
             if raw == "/sendreport":
-                if is_group:
-                    send_report_to_chat(chat_id, abs(chat_id))
-                else:
-                    groups = load_groups()
-                    if groups:
-                        send_report_to_chat(chat_id, list(groups)[0])
-                    else:
-                        send(chat_id, "⚠️ 未找到任何群组，请先在群里发送一条消息", show_keyboard=False)
+                send_report_to_chat(chat_id)
                 continue
 
             if raw in ["上", "上班"]:
@@ -382,7 +354,7 @@ while True:
                     send(chat_id, "\n".join(msgs), show_keyboard=True)
 
             elif cmd == "start":
-                send(chat_id, f"📋 考勤机器人\n👤 {user_name}\n🆔 {user_id}\n周一至周六9:00前准时，周日12:00前准时", show_keyboard=True)
+                send(chat_id, f"📋 考勤机器人\n👤 {user_name}\n🆔 {user_id}\n周一到周六9:10统计 | 周日12:10统计", show_keyboard=True)
 
         time.sleep(0.5)
 
