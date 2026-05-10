@@ -15,6 +15,7 @@ BOT_TOKEN = "13243514:3DFu4gK87ZWCPu4nWdLWY21Q4mZy2DgZZBG"
 BASE_URL = f"https://api.safew.org/bot{BOT_TOKEN}"
 DATA_FILE = "data.json"
 GROUPS_FILE = "groups.json"
+GROUP_ID = 10000602092
 
 KEYBOARD = {
     "keyboard": [
@@ -25,9 +26,9 @@ KEYBOARD = {
     "resize_keyboard": True
 }
 
-EXCLUDE_NAMES = ["Ellen匪", "表", "雨夜带刀不带伞", "红牛", "二东"]
+# 排除名单（不计入考勤）
+EXCLUDE_NAMES = ["Ellen匪", "表", "雨夜带刀不带伞", "红牛", "二东", "阿航"]
 
-# 固化 ID 名单
 FIXED_ID_NAME_MAP = {
     "13234945": "甄子丹",
     "13198655": "2胖",
@@ -105,14 +106,42 @@ def add_group(group_id):
         save_groups(groups)
         print(f"📌 自动记录群组: {group_id}")
 
+def auto_fix_data():
+    if not os.path.exists(DATA_FILE):
+        return
+    with open(DATA_FILE, 'r') as f:
+        data = json.load(f)
+    new_data = {}
+    fixed = 0
+    for key, val in data.items():
+        parts = key.split('_')
+        uid = None
+        if key.startswith('private_') and len(parts) >= 2:
+            uid = parts[1]
+        elif key.startswith('group_') and len(parts) >= 3:
+            uid = parts[-1]
+        if uid and uid.isdigit():
+            new_key = f'group_{GROUP_ID}_{uid}'
+            new_data[new_key] = val
+            if key != new_key:
+                fixed += 1
+                print(f'🔧 修复: {key} -> {new_key}')
+        else:
+            new_data[key] = val
+    if fixed > 0:
+        with open(DATA_FILE, 'w') as f:
+            json.dump(new_data, f, indent=2)
+        print(f'✅ 自动修复完成，共修复 {fixed} 条记录')
+
 def load_data():
+    auto_fix_data()
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
+        with open(DATA_FILE, 'r') as f:
             return json.load(f)
     return {}
 
 def save_data(data):
-    with open(DATA_FILE, "w") as f:
+    with open(DATA_FILE, 'w') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 def send(chat_id, text, show_keyboard=False):
@@ -135,22 +164,19 @@ def fmt(t):
         return f"{t}秒"
     return f"{t//60}分{t%60}秒"
 
-# ========== 生成考勤报告 ==========
 def get_report_for_group(group_id):
     data = load_data()
     today = beijing_now().strftime("%Y-%m-%d")
     now_time = beijing_now().strftime("%H:%M")
-
+    prefix = f"group_{abs(group_id)}_"
     checked_ids = set()
     for key, val in data.items():
-        if key.startswith(f"group_{group_id}_") and val.get("上班次数", 0) > 0:
+        if key.startswith(prefix) and val.get("上班次数", 0) > 0:
             uid = key.split("_")[-1]
             checked_ids.add(uid)
-
     full_map = get_full_name_map()
     checked_names = []
     late_names = []
-
     for uid, name in full_map.items():
         if name in EXCLUDE_NAMES:
             continue
@@ -158,7 +184,6 @@ def get_report_for_group(group_id):
             checked_names.append(name)
         else:
             late_names.append(name)
-
     total = len(checked_names) + len(late_names)
     msg = f"📊 今日考勤统计 ({today} {now_time})\n"
     msg += f"👥 应到人数：{total} 人\n"
@@ -167,47 +192,16 @@ def get_report_for_group(group_id):
     msg += f"❌ 迟到/未打卡名单：\n" + ("、".join(late_names) if late_names else "无")
     return msg
 
-def send_daily_report_to_group(group_id):
+def send_report_to_group(group_id):
     msg = get_report_for_group(group_id)
     send(group_id, msg, show_keyboard=False)
     print(f"✅ 已发送考勤统计到群组 {group_id}")
 
-def send_report_to_chat(chat_id):
-    msg = get_report_for_group(abs(chat_id))
+def send_report_to_chat(chat_id, group_id):
+    msg = get_report_for_group(group_id)
     send(chat_id, msg, show_keyboard=False)
     print(f"✅ 已发送考勤统计到 {chat_id}")
 
-# ========== 定时发送（周一到周六 9:10，周日 12:10）==========
-def daily_report_loop():
-    while True:
-        now = beijing_now()
-        weekday = now.weekday()  # 0=周一, 6=周日
-        
-        if weekday == 6:  # 周日
-            next_run = now.replace(hour=12, minute=10, second=0, microsecond=0)
-        else:  # 周一到周六
-            next_run = now.replace(hour=9, minute=10, second=0, microsecond=0)
-        
-        if now >= next_run:
-            next_run += timedelta(days=1)
-        
-        wait_seconds = (next_run - now).total_seconds()
-        
-        if weekday == 6:
-            print(f"📊 下次考勤统计时间 (周日): {next_run.strftime('%H:%M:%S')}")
-        else:
-            print(f"📊 下次考勤统计时间 (周一到周六): {next_run.strftime('%H:%M:%S')}")
-        
-        time.sleep(wait_seconds)
-
-        groups = load_groups()
-        if not groups:
-            print("⚠️ 尚未记录任何群组，不发送统计")
-        else:
-            for gid in groups:
-                send_daily_report_to_group(gid)
-
-# ========== 每天 3:00 清零 ==========
 def daily_reset_loop():
     while True:
         now = beijing_now()
@@ -218,15 +212,37 @@ def daily_reset_loop():
         print(f"⏰ 距离下次数据重置还有 {wait_seconds/3600:.1f} 小时")
         time.sleep(wait_seconds)
         save_data({})
-        print(f"✅ 每日考勤数据重置完成 (北京时间 {beijing_now().strftime('%Y-%m-%d %H:%M:%S')})")
+        print(f"✅ 每日考勤数据重置完成")
 
 threading.Thread(target=daily_reset_loop, daemon=True).start()
-threading.Thread(target=daily_report_loop, daemon=True).start()
 
-print("✅ 考勤机器人启动 | 每天3点清零 | 周一到周六9:10统计 | 周日12:10统计 | 私聊 /sendreport 获取统计")
+print("✅ 考勤机器人启动 | 每天3点清零 | 自动修复数据格式 | 定时发送统计")
 
 last_id = 0
 keyboard_activated = set()
+
+def scheduler():
+    while True:
+        now = beijing_now()
+        weekday = now.weekday()
+        if weekday == 6:
+            target_hour, target_minute = 12, 10
+        else:
+            target_hour, target_minute = 9, 10
+        next_run = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+        if now >= next_run:
+            next_run += timedelta(days=1)
+        wait_seconds = (next_run - now).total_seconds()
+        print(f"📊 下次考勤统计时间: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+        time.sleep(wait_seconds)
+        groups = load_groups()
+        if not groups:
+            print("⚠️ 尚未记录任何群组，不发送统计")
+        else:
+            for gid in groups:
+                send_report_to_group(gid)
+
+threading.Thread(target=scheduler, daemon=True).start()
 
 while True:
     try:
@@ -273,7 +289,14 @@ while True:
             cmd = None
 
             if raw == "/sendreport":
-                send_report_to_chat(chat_id)
+                if is_group:
+                    send_report_to_chat(chat_id, abs(chat_id))
+                else:
+                    groups = load_groups()
+                    if groups:
+                        send_report_to_chat(chat_id, list(groups)[0])
+                    else:
+                        send(chat_id, "⚠️ 未找到任何群组，请先在群里发送一条消息", show_keyboard=False)
                 continue
 
             if raw in ["上", "上班"]:
