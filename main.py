@@ -164,32 +164,62 @@ def fmt(t):
         return f"{t}秒"
     return f"{t//60}分{t%60}秒"
 
+# ========== 考勤统计核心逻辑 ==========
 def get_report_for_group(group_id):
     data = load_data()
-    today = beijing_now().strftime("%Y-%m-%d")
-    now_time = beijing_now().strftime("%H:%M")
+    now = beijing_now()
+    today = now.strftime("%Y-%m-%d")
+    report_time = now.strftime("%H:%M")
+    weekday = now.weekday()  # 0=周一, 6=周日
+
+    # 判定迟到的时间阈值
+    if weekday == 6:  # 周日
+        deadline = now.replace(hour=12, minute=0, second=0, microsecond=0)
+    else:  # 周一至周六
+        deadline = now.replace(hour=9, minute=0, second=0, microsecond=0)
+
     prefix = f"group_{abs(group_id)}_"
-    checked_ids = set()
+    checked_users = {}  # uid -> 打卡时间
+
     for key, val in data.items():
         if key.startswith(prefix) and val.get("上班次数", 0) > 0:
             uid = key.split("_")[-1]
-            checked_ids.add(uid)
+            work_start = val.get("work_start")
+            if work_start:
+                try:
+                    check_time = datetime.fromisoformat(work_start)
+                    if check_time.tzinfo is None:
+                        check_time = check_time.replace(tzinfo=BEIJING_TZ)
+                    checked_users[uid] = check_time
+                except:
+                    checked_users[uid] = deadline  # 容错：无法解析时间则视为准时
+
     full_map = get_full_name_map()
-    checked_names = []
-    late_names = []
+    on_time_list = []   # 准时
+    late_list = []      # 迟到
+    absent_list = []    # 缺勤
+
     for uid, name in full_map.items():
         if name in EXCLUDE_NAMES:
             continue
-        if uid in checked_ids:
-            checked_names.append(name)
+        if uid in checked_users:
+            check_time = checked_users[uid]
+            if check_time <= deadline:
+                on_time_list.append(name)
+            else:
+                late_list.append(name)
         else:
-            late_names.append(name)
-    total = len(checked_names) + len(late_names)
-    msg = f"📊 今日考勤统计 ({today} {now_time})\n"
+            absent_list.append(name)
+
+    total = len(on_time_list) + len(late_list) + len(absent_list)
+
+    # 构建消息
+    msg = f"📊 今日考勤统计 ({today} {report_time})\n"
     msg += f"👥 应到人数：{total} 人\n"
-    msg += f"✅ 实到人数：{len(checked_names)} 人\n\n"
-    msg += f"✅ 已打卡名单：\n" + ("、".join(checked_names) if checked_names else "无") + "\n\n"
-    msg += f"❌ 迟到/未打卡名单：\n" + ("、".join(late_names) if late_names else "无")
+    msg += f"✅ 实到人数：{len(on_time_list) + len(late_list)} 人\n\n"
+    msg += f"⏰ 准时 ({len(on_time_list)}人)：\n" + ("、".join(on_time_list) if on_time_list else "无") + "\n\n"
+    msg += f"⚠️ 迟到 ({len(late_list)}人)：\n" + ("、".join(late_list) if late_list else "无") + "\n\n"
+    msg += f"❌ 缺勤 ({len(absent_list)}人)：\n" + ("、".join(absent_list) if absent_list else "无")
     return msg
 
 def send_report_to_group(group_id):
@@ -216,7 +246,7 @@ def daily_reset_loop():
 
 threading.Thread(target=daily_reset_loop, daemon=True).start()
 
-print("✅ 考勤机器人启动 | 每天3点清零 | 自动修复数据格式 | 定时发送统计")
+print("✅ 考勤机器人启动 | 每天3点清零 | 已部署完整考勤规则")
 
 last_id = 0
 keyboard_activated = set()
@@ -225,9 +255,9 @@ def scheduler():
     while True:
         now = beijing_now()
         weekday = now.weekday()
-        if weekday == 6:
+        if weekday == 6:  # 周日
             target_hour, target_minute = 12, 10
-        else:
+        else:  # 周一至周六
             target_hour, target_minute = 9, 10
         next_run = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
         if now >= next_run:
@@ -235,6 +265,7 @@ def scheduler():
         wait_seconds = (next_run - now).total_seconds()
         print(f"📊 下次考勤统计时间: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
         time.sleep(wait_seconds)
+
         groups = load_groups()
         if not groups:
             print("⚠️ 尚未记录任何群组，不发送统计")
@@ -383,7 +414,7 @@ while True:
                     send(chat_id, "\n".join(msgs), show_keyboard=True)
 
             elif cmd == "start":
-                send(chat_id, f"📋 考勤机器人\n👤 {user_name}\n🆔 {user_id}\n周一到周六9:10统计 | 周日12:10统计\n私聊 /sendreport 查看", show_keyboard=True)
+                send(chat_id, f"📋 考勤机器人\n👤 {user_name}\n🆔 {user_id}\n考勤规则：周一至周六9:00前为准时，周日12:00前为准时", show_keyboard=True)
 
         time.sleep(0.5)
 
