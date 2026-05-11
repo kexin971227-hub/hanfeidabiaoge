@@ -15,8 +15,15 @@ BOT_TOKEN = "13243514:3DFu4gK87ZWCPu4nWdLWY21Q4mZy2DgZZBG"
 BASE_URL = f"https://api.safew.org/bot{BOT_TOKEN}"
 DATA_FILE = "data.json"
 
-# 群 ID（直接硬编码，再也不需要 groups.json）
-GROUP_ID = 10000602092
+# 群 ID
+GROUP_ID_SEND = -10000602092
+GROUP_ID_STORE = 10000602092
+
+# 超时限制（秒）
+TIMEOUT_LIMITS = {
+    "抽烟": 6 * 60,
+    "上厕所": 16 * 60
+}
 
 KEYBOARD = {
     "keyboard": [
@@ -119,19 +126,53 @@ def fmt(t):
         return f"{t}秒"
     return f"{t//60}分{t%60}秒"
 
-def get_report():
+def fmt_with_timeout(activity, seconds):
+    """返回时长字符串，如果超时则附加超时信息"""
+    base = fmt(seconds)
+    if activity in TIMEOUT_LIMITS:
+        limit = TIMEOUT_LIMITS[activity]
+        if seconds > limit:
+            overtime = seconds - limit
+            return f"{base} ⚠️ 超时 {fmt(overtime)}"
+    return base
+
+def auto_repair_data():
     data = load_data()
+    if not data:
+        return data
+    new_data = {}
+    repaired = 0
+    for key, val in data.items():
+        uid = None
+        if key.startswith('private_') and len(key.split('_')) >= 2:
+            uid = key.split('_')[1]
+        elif key.startswith('group_') and len(key.split('_')) >= 3:
+            uid = key.split('_')[-1]
+        if uid and uid.isdigit():
+            correct_key = f"group_{GROUP_ID_STORE}_{uid}"
+            new_data[correct_key] = val
+            if key != correct_key:
+                repaired += 1
+                print(f"🔧 修复: {key} -> {correct_key}")
+        else:
+            new_data[key] = val
+    if repaired > 0:
+        save_data(new_data)
+        print(f"✅ 修复 {repaired} 条记录")
+    return new_data
+
+def get_report():
+    data = auto_repair_data()
     now = beijing_now()
     today = now.strftime("%Y-%m-%d")
     report_time = now.strftime("%H:%M")
     weekday = now.weekday()
 
+    deadline = now.replace(hour=9, minute=0, second=0, microsecond=0)
     if weekday == 6:
         deadline = now.replace(hour=12, minute=0, second=0, microsecond=0)
-    else:
-        deadline = now.replace(hour=9, minute=0, second=0, microsecond=0)
 
-    prefix = f"group_{GROUP_ID}_"
+    prefix = f"group_{GROUP_ID_STORE}_"
     checked_users = {}
 
     for key, val in data.items():
@@ -175,8 +216,8 @@ def get_report():
 
 def send_report_to_group():
     msg = get_report()
-    send(GROUP_ID, msg, show_keyboard=False)
-    print(f"✅ 已发送考勤统计到群组 {GROUP_ID}")
+    send(GROUP_ID_SEND, msg, show_keyboard=False)
+    print("✅ 已发送考勤统计到群组")
 
 def send_report_to_chat(chat_id):
     msg = get_report()
@@ -197,7 +238,7 @@ def daily_reset_loop():
 
 threading.Thread(target=daily_reset_loop, daemon=True).start()
 
-print("✅ 考勤机器人启动 | 每天3点清零 | 群ID硬编码 | 定时发送统计")
+print("✅ 考勤机器人启动 | 超时提醒 | 自动修复 key")
 
 last_id = 0
 keyboard_activated = set()
@@ -210,11 +251,9 @@ def scheduler():
             target_hour, target_minute = 12, 10
         else:
             target_hour, target_minute = 9, 10
-
         target_time = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
         if now >= target_time:
             target_time += timedelta(days=1)
-
         wait_seconds = (target_time - now).total_seconds()
         print(f"📊 下次考勤统计时间: {target_time.strftime('%Y-%m-%d %H:%M:%S')}")
         time.sleep(wait_seconds)
@@ -245,9 +284,6 @@ while True:
             user_id = str(msg["from"]["id"])
             user_name = msg["from"].get("first_name", "") or msg["from"].get("username", "") or str(user_id)
             raw = msg.get("text", "").strip()
-
-            if is_group:
-                print(f"📌 收到群消息，群ID: {chat_id}")
 
             record_new_user(user_id, user_name)
 
@@ -314,21 +350,24 @@ while True:
                     db[key] = u
                     save_data(db)
                     cnt = u.get(cmd + "次数", 0) + 1
-                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 开始{cmd} {ts}\n今日第{cnt}次{cmd}\n\n完成后请【回座】", show_keyboard=True)
+                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 开始{cmd} {ts}\n第{cnt}次{cmd}\n\n完成后请【回座】", show_keyboard=True)
 
             elif cmd == "回座":
                 if u.get("state") != "in_activity":
                     send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n❌ 没有进行中的活动", show_keyboard=True)
                 else:
                     act = u.get("activity")
-                    adur = int((now - datetime.fromisoformat(u["act_start"])).total_seconds())
+                    astart = datetime.fromisoformat(u["act_start"])
+                    adur = int((now - astart).total_seconds())
                     u[act + "次数"] = u.get(act + "次数", 0) + 1
                     u["state"] = "working"
                     u.pop("activity", None)
                     u.pop("act_start", None)
                     db[key] = u
                     save_data(db)
-                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 回座成功\n{act}：{fmt(adur)}\n今日第{u[act+'次数']}次{act}", show_keyboard=True)
+
+                    duration_str = fmt_with_timeout(act, adur)
+                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 回座成功\n活动：{act}\n时长：{duration_str}\n第{u[act+'次数']}次{act}", show_keyboard=True)
 
             elif cmd == "下班":
                 if u.get("state") not in ["working", "in_activity"]:
@@ -337,9 +376,10 @@ while True:
                     msgs = [f"👤 {user_name}", f"🆔 {user_id}"]
                     if u.get("state") == "in_activity":
                         act = u.get("activity")
-                        adur = int((now - datetime.fromisoformat(u["act_start"])).total_seconds())
+                        astart = datetime.fromisoformat(u["act_start"])
+                        adur = int((now - astart).total_seconds())
                         u[act + "次数"] = u.get(act + "次数", 0) + 1
-                        msgs.append(f"📝 结束活动：{act}（{fmt(adur)}）")
+                        msgs.append(f"📝 结束活动：{act}（{fmt_with_timeout(act, adur)}）")
                     wdur = int((now - datetime.fromisoformat(u["work_start"])).total_seconds())
                     u["今日工作时长"] = u.get("今日工作时长", 0) + wdur
                     u["下班次数"] = u.get("下班次数", 0) + 1
@@ -354,7 +394,7 @@ while True:
                     send(chat_id, "\n".join(msgs), show_keyboard=True)
 
             elif cmd == "start":
-                send(chat_id, f"📋 考勤机器人\n👤 {user_name}\n🆔 {user_id}\n周一到周六9:10统计 | 周日12:10统计", show_keyboard=True)
+                send(chat_id, f"📋 考勤机器人\n👤 {user_name}\n🆔 {user_id}\n周一到周六9:10统计 | 周日12:10统计\n⚠️ 抽烟限6分钟，上厕所限16分钟，超时会提示", show_keyboard=True)
 
         time.sleep(0.5)
 
