@@ -15,14 +15,14 @@ BOT_TOKEN = "13243514:3DFu4gK87ZWCPu4nWdLWY21Q4mZy2DgZZBG"
 BASE_URL = f"https://api.safew.org/bot{BOT_TOKEN}"
 DATA_FILE = "data.json"
 
-# 群 ID
 GROUP_ID_SEND = -10000602092
 GROUP_ID_STORE = 10000602092
 
 # 超时限制（秒）
 TIMEOUT_LIMITS = {
     "抽烟": 6 * 60,
-    "上厕所": 16 * 60
+    "上厕所": 16 * 60,
+    "吃饭": 31 * 60
 }
 
 KEYBOARD = {
@@ -68,7 +68,9 @@ FIXED_ID_NAME_MAP = {
     "13235403": "小飞",
     "13234669": "南宫",
     "13233303": "大蛇",
-    "13234569": "小明"
+    "13234569": "小明",
+    "13305478": "旺仔",
+    "13277589": "小九"
 }
 
 DYNAMIC_ID_NAME_MAP = {}
@@ -94,7 +96,7 @@ def record_new_user(user_id, user_name):
     if user_id not in FIXED_ID_NAME_MAP and user_id not in DYNAMIC_ID_NAME_MAP:
         DYNAMIC_ID_NAME_MAP[user_id] = user_name
         save_dynamic_map()
-        print(f"📝 记录新用户: {user_name} ({user_id})")
+        print(f"📝 自动记录新用户: {user_name} ({user_id})")
 
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -127,7 +129,6 @@ def fmt(t):
     return f"{t//60}分{t%60}秒"
 
 def fmt_with_timeout(activity, seconds):
-    """返回时长字符串，如果超时则附加超时信息"""
     base = fmt(seconds)
     if activity in TIMEOUT_LIMITS:
         limit = TIMEOUT_LIMITS[activity]
@@ -158,7 +159,7 @@ def auto_repair_data():
             new_data[key] = val
     if repaired > 0:
         save_data(new_data)
-        print(f"✅ 修复 {repaired} 条记录")
+        print(f"✅ 自动修复 {repaired} 条记录")
     return new_data
 
 def get_report():
@@ -238,7 +239,7 @@ def daily_reset_loop():
 
 threading.Thread(target=daily_reset_loop, daemon=True).start()
 
-print("✅ 考勤机器人启动 | 超时提醒 | 自动修复 key")
+print("✅ 考勤机器人启动 | 超时提醒已开启 | 自动修复 key")
 
 last_id = 0
 keyboard_activated = set()
@@ -289,7 +290,7 @@ while True:
 
             if chat_id not in keyboard_activated:
                 keyboard_activated.add(chat_id)
-                send(chat_id, "📋 考勤机器人已激活\n命令：上(上班) 下(下班) 回(回座)\n活动：吃/厕/抽/其\n发送 /sendreport 手动获取统计", show_keyboard=True)
+                send(chat_id, "📋 考勤机器人已激活\n命令：上(上班) 下(下班) 回(回座)\n活动：吃/厕/抽/其\n发送 /sendreport 手动获取统计\n\n📌 打卡全天有效（截止次日凌晨3:00）\n📌 统计报告发送时间：周一到周六 9:10，周日 12:10\n📌 统计后无需重新打卡，记录自动保留", show_keyboard=True)
 
             key = get_key(chat_id, user_id)
             db = load_data()
@@ -394,7 +395,7 @@ while True:
                     send(chat_id, "\n".join(msgs), show_keyboard=True)
 
             elif cmd == "start":
-                send(chat_id, f"📋 考勤机器人\n👤 {user_name}\n🆔 {user_id}\n周一到周六9:10统计 | 周日12:10统计\n⚠️ 抽烟限6分钟，上厕所限16分钟，超时会提示", show_keyboard=True)
+                send(chat_id, f"📋 考勤机器人\n👤 {user_name}\n🆔 {user_id}\n周一到周六9:10统计 | 周日12:10统计\n⚠️ 抽烟限6分钟，上厕所限16分钟，吃饭限31分钟，超时会提示\n\n📌 打卡全天有效（截止次日凌晨3:00）\n📌 统计后无需重新打卡，记录自动保留", show_keyboard=True)
 
         time.sleep(0.5)
 
