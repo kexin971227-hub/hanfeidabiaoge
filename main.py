@@ -17,7 +17,7 @@ DATA_FILE = "data.json"
 
 GROUP_ID_SEND = -10000602092
 GROUP_ID_STORE = 10000602092
-ADMIN_ID = 13227717  # Ellen匪
+ADMIN_ID = 13227717
 
 TIMEOUT_LIMITS = {
     "抽烟": 6 * 60,
@@ -70,7 +70,9 @@ FIXED_ID_NAME_MAP = {
     "13233303": "大蛇",
     "13234569": "小明",
     "13305478": "旺仔",
-    "13277589": "小九"
+    "13277589": "小九",
+    "13305500": "阿枫",
+    "13305501": "林云"
 }
 
 DYNAMIC_ID_NAME_MAP = {}
@@ -123,10 +125,14 @@ def get_key(chat_id, user_id):
         return f"group_{abs(chat_id)}_{user_id}"
     return f"private_{user_id}"
 
-def fmt(t):
-    if t < 60:
-        return f"{t}秒"
-    return f"{t//60}分{t%60}秒"
+def fmt(seconds):
+    if seconds < 60:
+        return f"{seconds}秒"
+    minutes = seconds // 60
+    secs = seconds % 60
+    if secs == 0:
+        return f"{minutes}分钟"
+    return f"{minutes}分{secs}秒"
 
 def fmt_with_timeout(activity, seconds):
     base = fmt(seconds)
@@ -137,21 +143,44 @@ def fmt_with_timeout(activity, seconds):
             return f"{base} ⚠️ 超时 {fmt(overtime)}"
     return base
 
-def get_detailed_report(data, target_date):
-    """生成详细报告（用于日报和群统计）"""
-    now = beijing_now()
-    report_time = now.strftime("%H:%M")
-    weekday = now.weekday()
+def auto_repair_data():
+    """自动修复所有 key 格式"""
+    if not os.path.exists(DATA_FILE):
+        return
+    with open(DATA_FILE, 'r') as f:
+        data = json.load(f)
+    if not data:
+        return
+    
+    new_data = {}
+    repaired = 0
+    for key, val in data.items():
+        uid = None
+        if key.startswith('private_') and len(key.split('_')) >= 2:
+            uid = key.split('_')[1]
+        elif key.startswith('group_') and len(key.split('_')) >= 3:
+            uid = key.split('_')[-1]
+        
+        if uid and uid.isdigit():
+            correct_key = f"group_{GROUP_ID_STORE}_{uid}"
+            new_data[correct_key] = val
+            if key != correct_key:
+                repaired += 1
+                print(f"🔧 修复: {key} -> {correct_key}")
+        else:
+            new_data[key] = val
+    
+    if repaired > 0:
+        save_data(new_data)
+        print(f"✅ 自动修复 {repaired} 条记录")
 
-    if weekday == 6:
-        deadline = now.replace(hour=12, minute=0, second=0, microsecond=0)
-    else:
-        deadline = now.replace(hour=9, minute=0, second=0, microsecond=0)
-
+def get_daily_report(target_date):
+    """生成指定日期的考勤报告"""
+    auto_repair_data()  # 每次统计前自动修复
+    data = load_data()
     prefix = f"group_{GROUP_ID_STORE}_"
-    checked_users = {}
-    user_details = []
-
+    today_records = []
+    
     for key, val in data.items():
         if key.startswith(prefix):
             uid = key.split("_")[-1]
@@ -159,78 +188,52 @@ def get_detailed_report(data, target_date):
             work_start = val.get("work_start")
             if work_start and work_start.startswith(target_date):
                 try:
-                    check_time = datetime.fromisoformat(work_start)
-                    if check_time.tzinfo is None:
-                        check_time = check_time.replace(tzinfo=BEIJING_TZ)
-                    checked_users[uid] = check_time
-                    # 记录详情
-                    time_str = check_time.strftime("%H:%M:%S")
-                    user_details.append(f"  • {name} ({uid}): {time_str}")
+                    dt = datetime.fromisoformat(work_start)
+                    today_records.append((name, dt, uid))
                 except:
-                    checked_users[uid] = deadline
-                    user_details.append(f"  • {name} ({uid}): 时间解析错误")
-
+                    pass
+    
+    today_records.sort(key=lambda x: x[1])
+    
     full_map = get_full_name_map()
-    on_time_list = []
-    late_list = []
-    absent_list = []
-
-    for uid, name in full_map.items():
-        if name in EXCLUDE_NAMES:
-            continue
-        if uid in checked_users:
-            check_time = checked_users[uid]
-            if check_time <= deadline:
-                on_time_list.append(name)
-            else:
-                late_list.append(name)
-        else:
-            absent_list.append(name)
-
-    total = len(on_time_list) + len(late_list) + len(absent_list)
+    all_names = [name for uid, name in full_map.items() if name not in EXCLUDE_NAMES]
+    checked_names = [name for name, _, _ in today_records]
+    absent_names = [name for name in all_names if name not in checked_names]
     
-    msg = f"📊 考勤统计 ({target_date} {report_time})\n"
-    msg += f"👥 应到人数：{total} 人\n"
-    msg += f"✅ 实到人数：{len(on_time_list) + len(late_list)} 人\n\n"
+    msg = f"📊 考勤统计 ({target_date})\n"
+    msg += f"👥 应到人数：{len(all_names)} 人\n"
+    msg += f"✅ 实到人数：{len(checked_names)} 人\n\n"
     
-    if on_time_list:
-        msg += f"⏰ 准时 ({len(on_time_list)}人)：\n" + "、".join(on_time_list) + "\n\n"
-    if late_list:
-        msg += f"⚠️ 迟到 ({len(late_list)}人)：\n" + "、".join(late_list) + "\n\n"
-    if absent_list:
-        msg += f"❌ 缺勤 ({len(absent_list)}人)：\n" + "、".join(absent_list) + "\n\n"
+    if today_records:
+        msg += "📋 打卡记录：\n"
+        for name, dt, uid in today_records:
+            msg += f"  • {name} ({uid}): {dt.strftime('%H:%M:%S')}\n"
+        msg += "\n"
     
-    if user_details:
-        msg += "📋 详细打卡记录：\n" + "\n".join(user_details)
+    if absent_names:
+        msg += f"❌ 缺勤 ({len(absent_names)}人)：\n" + "、".join(absent_names)
     
     return msg
 
-def get_report():
-    data = load_data()
+def get_today_report():
     today = beijing_now().strftime("%Y-%m-%d")
-    return get_detailed_report(data, today)
+    return get_daily_report(today)
 
 def send_report_to_group():
-    msg = get_report()
+    msg = get_today_report()
     send(GROUP_ID_SEND, msg, show_keyboard=False)
     print("✅ 已发送考勤统计到群组")
 
 def send_report_to_chat(chat_id):
-    msg = get_report()
+    msg = get_today_report()
     send(chat_id, msg, show_keyboard=False)
     print(f"✅ 已发送考勤统计到 {chat_id}")
 
-def send_daily_report_to_admin():
-    """发送详细的昨日打卡记录给管理员"""
-    data = load_data()
-    if not data:
-        send(ADMIN_ID, "📋 昨日无打卡记录", show_keyboard=False)
-        return
-    
+def send_yesterday_report_to_admin():
     yesterday = (beijing_now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    msg = get_detailed_report(data, yesterday)
+    msg = get_daily_report(yesterday)
     send(ADMIN_ID, msg, show_keyboard=False)
-    print(f"✅ 已发送昨日详细打卡记录给管理员 {ADMIN_ID}")
+    print(f"✅ 已发送昨日考勤报告给管理员 {ADMIN_ID}")
 
 def daily_reset_loop():
     while True:
@@ -242,16 +245,13 @@ def daily_reset_loop():
         print(f"⏰ 距离下次数据重置还有 {wait_seconds/3600:.1f} 小时")
         time.sleep(wait_seconds)
         
-        # 重置前发送昨日详细记录给管理员
-        send_daily_report_to_admin()
-        
-        # 重置数据
+        send_yesterday_report_to_admin()
         save_data({})
         print(f"✅ 每日考勤数据重置完成")
 
 threading.Thread(target=daily_reset_loop, daemon=True).start()
 
-print("✅ 考勤机器人启动 | 每天3点重置 | 详细日报 | 超时统计")
+print("✅ 考勤机器人启动 | 自动修复 | 每天3点重置 | 详细日报")
 
 last_id = 0
 keyboard_activated = set()
@@ -302,7 +302,7 @@ while True:
 
             if chat_id not in keyboard_activated:
                 keyboard_activated.add(chat_id)
-                send(chat_id, "📋 考勤机器人已激活\n命令：上(上班) 下(下班) 回(回座)\n活动：吃/厕/抽/其\n发送 /sendreport 手动获取统计\n\n📌 打卡全天有效（截止次日凌晨3:00）\n📌 查询只读，不修改数据\n📌 同一天再次打卡会提示已在上班中", show_keyboard=True)
+                send(chat_id, "📋 考勤机器人已激活\n命令：上(上班) 下(下班) 回(回座)\n活动：吃/厕/抽/其\n发送 /sendreport 手动获取统计", show_keyboard=True)
 
             key = get_key(chat_id, user_id)
             db = load_data()
@@ -363,7 +363,7 @@ while True:
                     db[key] = u
                     save_data(db)
                     cnt = u.get(cmd + "次数", 0) + 1
-                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 开始{cmd} {ts}\n第{cnt}次{cmd}\n\n完成后请【回座】", show_keyboard=True)
+                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 开始{cmd} {ts}\n今日第{cnt}次{cmd}\n\n完成后请【回座】", show_keyboard=True)
 
             elif cmd == "回座":
                 if u.get("state") != "in_activity":
@@ -380,7 +380,7 @@ while True:
                     save_data(db)
 
                     duration_str = fmt_with_timeout(act, adur)
-                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 回座成功\n活动：{act}\n时长：{duration_str}\n第{u[act+'次数']}次{act}", show_keyboard=True)
+                    send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 回座成功\n活动：{act}\n时长：{duration_str}\n今日第{u[act+'次数']}次{act}", show_keyboard=True)
 
             elif cmd == "下班":
                 if u.get("state") not in ["working", "in_activity"]:
@@ -407,7 +407,7 @@ while True:
                     send(chat_id, "\n".join(msgs), show_keyboard=True)
 
             elif cmd == "start":
-                send(chat_id, f"📋 考勤机器人\n👤 {user_name}\n🆔 {user_id}\n周一到周六9:10统计 | 周日12:10统计\n⚠️ 抽烟限6分钟，上厕所限16分钟，吃饭限31分钟\n\n📌 打卡全天有效（截止次日凌晨3:00）\n📌 /sendreport 只读，不修改数据\n📌 同一天再次打卡会提示已在上班中", show_keyboard=True)
+                send(chat_id, f"📋 考勤机器人\n👤 {user_name}\n🆔 {user_id}\n周一到周六9:10统计 | 周日12:10统计\n⚠️ 抽烟≤6分钟 上厕所≤16分钟 吃饭≤31分钟", show_keyboard=True)
 
         time.sleep(0.5)
 
