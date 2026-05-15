@@ -34,45 +34,47 @@ KEYBOARD = {
     "resize_keyboard": True
 }
 
-EXCLUDE_NAMES = ["Ellen匪", "表", "雨夜带刀不带伞", "红牛", "二东", "阿航"]
+# 排除名单（不计入考勤统计）
+EXCLUDE_NAMES = ["Ellen匪", "表", "雨夜带刀不带伞", "红牛", "二东", "阿航", "大力出奇迹"]
 
 FIXED_ID_NAME_MAP = {
+    "13234569": "小明",
+    "13321501": "林云",
+    "13235219": "林强",
+    "13235403": "小飞",
+    "13234715": "小涛",
     "13234945": "甄子丹",
+    "13235100": "路克",
+    "13235185": "招财",
+    "13233448": "啊朕",
+    "13198948": "阿鬼",
     "13198655": "2胖",
+    "13326014": "黑龙",
+    "13327822": "太阳",
+    "13234468": "晴天",
+    "13200020": "罗杰",
+    "13234881": "阿火",
     "13198739": "胖胖",
+    "13198841": "小二",
     "13233106": "南",
     "13198523": "振亮",
-    "13235100": "路克",
-    "13232984": "蓝心羽",
-    "13198841": "小二",
-    "13200020": "罗杰",
-    "13198171": "九",
     "13235012": "冰岛",
-    "13235185": "招财",
-    "13235219": "林强",
-    "13199957": "安仔",
-    "10515461": "阿乐",
-    "13234881": "阿火",
-    "13234715": "小涛",
+    "13198171": "九",
     "13234840": "小康",
+    "13321490": "阿枫",
     "13233117": "毛毛",
-    "13233739": "阿超",
-    "13233506": "舒克",
-    "13234468": "晴天",
-    "13232797": "大力出奇迹",
-    "13198948": "阿鬼",
-    "13234476": "老二",
-    "13233448": "啊朕",
-    "13198685": "星辰",
     "13232756": "阿飞",
-    "13235403": "小飞",
-    "13234669": "南宫",
-    "13233303": "大蛇",
-    "13234569": "小明",
+    "13232984": "蓝心羽",
+    "10515461": "阿乐",
+    "13198685": "星辰",
     "13305478": "旺仔",
-    "13277589": "小九",
-    "13305500": "阿枫",
-    "13305501": "林云"
+    "13233303": "大蛇",
+    "13233506": "舒克",
+    "13199957": "安仔",
+    "13234669": "南宫",
+    "13233739": "阿超",
+    "13317648": "小九",
+    "13234476": "老二"
 }
 
 DYNAMIC_ID_NAME_MAP = {}
@@ -144,14 +146,12 @@ def fmt_with_timeout(activity, seconds):
     return base
 
 def auto_repair_data():
-    """自动修复所有 key 格式"""
     if not os.path.exists(DATA_FILE):
         return
     with open(DATA_FILE, 'r') as f:
         data = json.load(f)
     if not data:
         return
-    
     new_data = {}
     repaired = 0
     for key, val in data.items():
@@ -160,7 +160,6 @@ def auto_repair_data():
             uid = key.split('_')[1]
         elif key.startswith('group_') and len(key.split('_')) >= 3:
             uid = key.split('_')[-1]
-        
         if uid and uid.isdigit():
             correct_key = f"group_{GROUP_ID_STORE}_{uid}"
             new_data[correct_key] = val
@@ -169,17 +168,16 @@ def auto_repair_data():
                 print(f"🔧 修复: {key} -> {correct_key}")
         else:
             new_data[key] = val
-    
     if repaired > 0:
         save_data(new_data)
         print(f"✅ 自动修复 {repaired} 条记录")
 
-def get_daily_report(target_date):
-    """生成指定日期的考勤报告"""
-    auto_repair_data()  # 每次统计前自动修复
+def get_daily_full_report(target_date):
+    """获取全天的详细打卡记录（包含所有活动、超时）"""
+    auto_repair_data()
     data = load_data()
     prefix = f"group_{GROUP_ID_STORE}_"
-    today_records = []
+    all_activities = []
     
     for key, val in data.items():
         if key.startswith(prefix):
@@ -189,51 +187,122 @@ def get_daily_report(target_date):
             if work_start and work_start.startswith(target_date):
                 try:
                     dt = datetime.fromisoformat(work_start)
-                    today_records.append((name, dt, uid))
+                    all_activities.append((dt, f"{name} {dt.strftime('%H:%M:%S')} 上班"))
+                except:
+                    pass
+            
+            # 获取活动记录
+            activity = val.get("activity")
+            act_start = val.get("act_start")
+            act_duration = val.get("act_duration")
+            if activity and act_start and act_start.startswith(target_date):
+                try:
+                    dt = datetime.fromisoformat(act_start)
+                    if act_duration:
+                        duration_str = fmt_with_timeout(activity, act_duration)
+                        all_activities.append((dt, f"{name} {dt.strftime('%H:%M:%S')} {activity} {duration_str}"))
+                    else:
+                        all_activities.append((dt, f"{name} {dt.strftime('%H:%M:%S')} 开始{activity}"))
                 except:
                     pass
     
-    today_records.sort(key=lambda x: x[1])
+    all_activities.sort(key=lambda x: x[0])
     
-    full_map = get_full_name_map()
-    all_names = [name for uid, name in full_map.items() if name not in EXCLUDE_NAMES]
-    checked_names = [name for name, _, _ in today_records]
-    absent_names = [name for name in all_names if name not in checked_names]
-    
-    msg = f"📊 考勤统计 ({target_date})\n"
-    msg += f"👥 应到人数：{len(all_names)} 人\n"
-    msg += f"✅ 实到人数：{len(checked_names)} 人\n\n"
-    
-    if today_records:
-        msg += "📋 打卡记录：\n"
-        for name, dt, uid in today_records:
-            msg += f"  • {name} ({uid}): {dt.strftime('%H:%M:%S')}\n"
-        msg += "\n"
-    
-    if absent_names:
-        msg += f"❌ 缺勤 ({len(absent_names)}人)：\n" + "、".join(absent_names)
+    msg = f"📋 全天打卡记录 ({target_date})\n\n"
+    if all_activities:
+        for _, record in all_activities:
+            msg += f"{record}\n"
+    else:
+        msg += "无打卡记录"
     
     return msg
 
-def get_today_report():
+def get_attendance_report(target_date):
+    """获取上班考勤统计（应到、实到、迟到、缺勤）"""
+    auto_repair_data()
+    data = load_data()
+    now = beijing_now()
+    weekday = now.weekday()
+    
+    if weekday == 6:
+        deadline = now.replace(hour=12, minute=0, second=0, microsecond=0)
+    else:
+        deadline = now.replace(hour=9, minute=0, second=0, microsecond=0)
+    
+    prefix = f"group_{GROUP_ID_STORE}_"
+    checked_users = {}
+    
+    for key, val in data.items():
+        if key.startswith(prefix):
+            uid = key.split("_")[-1]
+            work_start = val.get("work_start")
+            if work_start and work_start.startswith(target_date):
+                try:
+                    check_time = datetime.fromisoformat(work_start)
+                    if check_time.tzinfo is None:
+                        check_time = check_time.replace(tzinfo=BEIJING_TZ)
+                    checked_users[uid] = check_time
+                except:
+                    checked_users[uid] = deadline
+    
+    full_map = get_full_name_map()
+    on_time_list = []
+    late_list = []
+    absent_list = []
+    
+    for uid, name in full_map.items():
+        if name in EXCLUDE_NAMES:
+            continue
+        if uid in checked_users:
+            check_time = checked_users[uid]
+            if check_time <= deadline:
+                on_time_list.append(name)
+            else:
+                late_list.append(name)
+        else:
+            absent_list.append(name)
+    
+    msg = f"📊 上班考勤统计 ({target_date})\n"
+    msg += f"👥 应到人数：{len(on_time_list) + len(late_list) + len(absent_list)} 人\n"
+    msg += f"✅ 实到人数：{len(on_time_list) + len(late_list)} 人\n\n"
+    
+    if on_time_list:
+        msg += f"⏰ 准时 ({len(on_time_list)}人)：\n" + "、".join(on_time_list) + "\n\n"
+    if late_list:
+        msg += f"⚠️ 迟到 ({len(late_list)}人)：\n" + "、".join(late_list) + "\n\n"
+    if absent_list:
+        msg += f"❌ 缺勤 ({len(absent_list)}人)：\n" + "、".join(absent_list)
+    
+    return msg
+
+def send_full_report_to_admin():
+    """凌晨3点发送全天详细记录给管理员"""
+    yesterday = (beijing_now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    msg = get_daily_full_report(yesterday)
+    send(ADMIN_ID, msg, show_keyboard=False)
+    print(f"✅ 已发送全天详细记录给管理员 {ADMIN_ID}")
+
+def send_attendance_to_admin():
+    """早上9:00（周一到周六）/中午12:00（周日）发送上班考勤统计给管理员"""
     today = beijing_now().strftime("%Y-%m-%d")
-    return get_daily_report(today)
+    msg = get_attendance_report(today)
+    send(ADMIN_ID, msg, show_keyboard=False)
+    print(f"✅ 已发送上班考勤统计给管理员 {ADMIN_ID}")
 
 def send_report_to_group():
-    msg = get_today_report()
+    """发送群考勤统计"""
+    today = beijing_now().strftime("%Y-%m-%d")
+    msg = get_attendance_report(today)
+    msg += "\n\n✅ 统计不影响打卡状态，无需重新打卡"
     send(GROUP_ID_SEND, msg, show_keyboard=False)
     print("✅ 已发送考勤统计到群组")
 
 def send_report_to_chat(chat_id):
-    msg = get_today_report()
+    today = beijing_now().strftime("%Y-%m-%d")
+    msg = get_attendance_report(today)
+    msg += "\n\n✅ 统计不影响打卡状态，无需重新打卡"
     send(chat_id, msg, show_keyboard=False)
     print(f"✅ 已发送考勤统计到 {chat_id}")
-
-def send_yesterday_report_to_admin():
-    yesterday = (beijing_now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    msg = get_daily_report(yesterday)
-    send(ADMIN_ID, msg, show_keyboard=False)
-    print(f"✅ 已发送昨日考勤报告给管理员 {ADMIN_ID}")
 
 def daily_reset_loop():
     while True:
@@ -245,18 +314,28 @@ def daily_reset_loop():
         print(f"⏰ 距离下次数据重置还有 {wait_seconds/3600:.1f} 小时")
         time.sleep(wait_seconds)
         
-        send_yesterday_report_to_admin()
+        send_full_report_to_admin()
         save_data({})
         print(f"✅ 每日考勤数据重置完成")
 
-threading.Thread(target=daily_reset_loop, daemon=True).start()
+def admin_attendance_loop():
+    """每天早上9:00（周一到周六）/中午12:00（周日）发送上班考勤统计给管理员"""
+    while True:
+        now = beijing_now()
+        weekday = now.weekday()
+        if weekday == 6:
+            target_hour, target_minute = 12, 0
+        else:
+            target_hour, target_minute = 9, 0
+        target_time = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+        if now >= target_time:
+            target_time += timedelta(days=1)
+        wait_seconds = (target_time - now).total_seconds()
+        print(f"📊 下次管理员考勤统计时间: {target_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        time.sleep(wait_seconds)
+        send_attendance_to_admin()
 
-print("✅ 考勤机器人启动 | 自动修复 | 每天3点重置 | 详细日报")
-
-last_id = 0
-keyboard_activated = set()
-
-def scheduler():
+def group_scheduler():
     while True:
         now = beijing_now()
         weekday = now.weekday()
@@ -268,11 +347,18 @@ def scheduler():
         if now >= target_time:
             target_time += timedelta(days=1)
         wait_seconds = (target_time - now).total_seconds()
-        print(f"📊 下次考勤统计时间: {target_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"📊 下次群考勤统计时间: {target_time.strftime('%Y-%m-%d %H:%M:%S')}")
         time.sleep(wait_seconds)
         send_report_to_group()
 
-threading.Thread(target=scheduler, daemon=True).start()
+threading.Thread(target=daily_reset_loop, daemon=True).start()
+threading.Thread(target=admin_attendance_loop, daemon=True).start()
+threading.Thread(target=group_scheduler, daemon=True).start()
+
+print("✅ 考勤机器人启动 | 每天3点重置 | 每天9:00/12:00给管理员发考勤 | 每天9:10/12:10群统计")
+
+last_id = 0
+keyboard_activated = set()
 
 while True:
     try:
@@ -372,7 +458,10 @@ while True:
                     act = u.get("activity")
                     astart = datetime.fromisoformat(u["act_start"])
                     adur = int((now - astart).total_seconds())
+                    
+                    # 保存活动时长
                     u[act + "次数"] = u.get(act + "次数", 0) + 1
+                    u["act_duration"] = adur
                     u["state"] = "working"
                     u.pop("activity", None)
                     u.pop("act_start", None)
@@ -392,6 +481,7 @@ while True:
                         astart = datetime.fromisoformat(u["act_start"])
                         adur = int((now - astart).total_seconds())
                         u[act + "次数"] = u.get(act + "次数", 0) + 1
+                        u["act_duration"] = adur
                         msgs.append(f"📝 结束活动：{act}（{fmt_with_timeout(act, adur)}）")
                     wdur = int((now - datetime.fromisoformat(u["work_start"])).total_seconds())
                     u["今日工作时长"] = u.get("今日工作时长", 0) + wdur
