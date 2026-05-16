@@ -15,10 +15,14 @@ BOT_TOKEN = "13243514:3DFu4gK87ZWCPu4nWdLWY21Q4mZy2DgZZBG"
 BASE_URL = f"https://api.safew.org/bot{BOT_TOKEN}"
 DATA_FILE = "data.json"
 
-GROUP_ID_SEND = -10000602092
-GROUP_ID_STORE = 10000602092
-ADMIN_ID = 13227717
+# 发送对象配置
+GROUP_ID_SEND = -10000602092  # 打卡群
+ADMIN_ID = 13227717  # Ellen匪
 
+# 存储 key 使用的正数群 ID
+GROUP_ID_STORE = 10000602092
+
+# 超时阈值（秒）- 超过才算超时
 TIMEOUT_LIMITS = {
     "抽烟": 6 * 60,
     "上厕所": 16 * 60,
@@ -34,7 +38,6 @@ KEYBOARD = {
     "resize_keyboard": True
 }
 
-# 排除名单（不计入考勤统计）
 EXCLUDE_NAMES = ["Ellen匪", "表", "雨夜带刀不带伞", "红牛", "二东", "阿航", "大力出奇迹"]
 
 FIXED_ID_NAME_MAP = {
@@ -138,11 +141,10 @@ def fmt(seconds):
 
 def fmt_with_timeout(activity, seconds):
     base = fmt(seconds)
-    if activity in TIMEOUT_LIMITS:
-        limit = TIMEOUT_LIMITS[activity]
-        if seconds > limit:
-            overtime = seconds - limit
-            return f"{base} ⚠️ 超时 {fmt(overtime)}"
+    limit = TIMEOUT_LIMITS.get(activity)
+    if limit and seconds > limit:
+        overtime = seconds - limit
+        return f"{base} ⚠️ 超时 {fmt(overtime)}"
     return base
 
 def auto_repair_data():
@@ -172,9 +174,10 @@ def auto_repair_data():
         save_data(new_data)
         print(f"✅ 自动修复 {repaired} 条记录")
 
+auto_repair_data()
+
 def get_daily_full_report(target_date):
-    """获取全天的详细打卡记录（包含所有活动、超时）"""
-    auto_repair_data()
+    """全天的详细打卡记录（包含所有活动、超时）"""
     data = load_data()
     prefix = f"group_{GROUP_ID_STORE}_"
     all_activities = []
@@ -183,26 +186,27 @@ def get_daily_full_report(target_date):
         if key.startswith(prefix):
             uid = key.split("_")[-1]
             name = get_full_name_map().get(uid, uid)
+            
             work_start = val.get("work_start")
             if work_start and work_start.startswith(target_date):
                 try:
                     dt = datetime.fromisoformat(work_start)
-                    all_activities.append((dt, f"{name} {dt.strftime('%H:%M:%S')} 上班"))
+                    all_activities.append((dt, f"✅ {name} {dt.strftime('%H:%M:%S')} 上班"))
                 except:
                     pass
             
-            # 获取活动记录
             activity = val.get("activity")
             act_start = val.get("act_start")
             act_duration = val.get("act_duration")
+            
             if activity and act_start and act_start.startswith(target_date):
                 try:
                     dt = datetime.fromisoformat(act_start)
                     if act_duration:
                         duration_str = fmt_with_timeout(activity, act_duration)
-                        all_activities.append((dt, f"{name} {dt.strftime('%H:%M:%S')} {activity} {duration_str}"))
+                        all_activities.append((dt, f"📝 {name} {dt.strftime('%H:%M:%S')} {activity} {duration_str}"))
                     else:
-                        all_activities.append((dt, f"{name} {dt.strftime('%H:%M:%S')} 开始{activity}"))
+                        all_activities.append((dt, f"🔵 {name} {dt.strftime('%H:%M:%S')} 开始{activity}"))
                 except:
                     pass
     
@@ -215,19 +219,22 @@ def get_daily_full_report(target_date):
     else:
         msg += "无打卡记录"
     
+    work_count = len([r for _, r in all_activities if '上班' in r])
+    msg += f"\n📊 总计：{work_count} 人上班"
+    
     return msg
 
 def get_attendance_report(target_date):
-    """获取上班考勤统计（应到、实到、迟到、缺勤）"""
-    auto_repair_data()
+    """上班考勤统计（准时/迟到/缺勤）"""
     data = load_data()
-    now = beijing_now()
-    weekday = now.weekday()
+    target_dt = datetime.strptime(target_date, "%Y-%m-%d")
+    target_dt = target_dt.replace(tzinfo=BEIJING_TZ)
+    weekday = target_dt.weekday()
     
     if weekday == 6:
-        deadline = now.replace(hour=12, minute=0, second=0, microsecond=0)
+        deadline = target_dt.replace(hour=12, minute=0, second=0, microsecond=0)
     else:
-        deadline = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        deadline = target_dt.replace(hour=9, minute=0, second=0, microsecond=0)
     
     prefix = f"group_{GROUP_ID_STORE}_"
     checked_users = {}
@@ -262,8 +269,9 @@ def get_attendance_report(target_date):
         else:
             absent_list.append(name)
     
+    total = len(on_time_list) + len(late_list) + len(absent_list)
     msg = f"📊 上班考勤统计 ({target_date})\n"
-    msg += f"👥 应到人数：{len(on_time_list) + len(late_list) + len(absent_list)} 人\n"
+    msg += f"👥 应到人数：{total} 人\n"
     msg += f"✅ 实到人数：{len(on_time_list) + len(late_list)} 人\n\n"
     
     if on_time_list:
@@ -276,21 +284,21 @@ def get_attendance_report(target_date):
     return msg
 
 def send_full_report_to_admin():
-    """凌晨3点发送全天详细记录给管理员"""
+    """凌晨3点发送全天详细记录给 Ellen匪（只读）"""
     yesterday = (beijing_now() - timedelta(days=1)).strftime("%Y-%m-%d")
     msg = get_daily_full_report(yesterday)
     send(ADMIN_ID, msg, show_keyboard=False)
     print(f"✅ 已发送全天详细记录给管理员 {ADMIN_ID}")
 
 def send_attendance_to_admin():
-    """早上9:00（周一到周六）/中午12:00（周日）发送上班考勤统计给管理员"""
+    """早上9:00（周一到周六）/中午12:00（周日）发送上班考勤统计给 Ellen匪（只读）"""
     today = beijing_now().strftime("%Y-%m-%d")
     msg = get_attendance_report(today)
     send(ADMIN_ID, msg, show_keyboard=False)
     print(f"✅ 已发送上班考勤统计给管理员 {ADMIN_ID}")
 
 def send_report_to_group():
-    """发送群考勤统计"""
+    """群统计：周一到周六9:10，周日12:10（只读）"""
     today = beijing_now().strftime("%Y-%m-%d")
     msg = get_attendance_report(today)
     msg += "\n\n✅ 统计不影响打卡状态，无需重新打卡"
@@ -298,6 +306,7 @@ def send_report_to_group():
     print("✅ 已发送考勤统计到群组")
 
 def send_report_to_chat(chat_id):
+    """手动发送统计（只读）"""
     today = beijing_now().strftime("%Y-%m-%d")
     msg = get_attendance_report(today)
     msg += "\n\n✅ 统计不影响打卡状态，无需重新打卡"
@@ -305,6 +314,7 @@ def send_report_to_chat(chat_id):
     print(f"✅ 已发送考勤统计到 {chat_id}")
 
 def daily_reset_loop():
+    """每天凌晨3:00 重置所有数据（新的一天）"""
     while True:
         now = beijing_now()
         next_reset = now.replace(hour=3, minute=0, second=0, microsecond=0)
@@ -314,12 +324,15 @@ def daily_reset_loop():
         print(f"⏰ 距离下次数据重置还有 {wait_seconds/3600:.1f} 小时")
         time.sleep(wait_seconds)
         
+        # 先发送昨天的全天报告（只读）
         send_full_report_to_admin()
+        
+        # 再重置数据
         save_data({})
         print(f"✅ 每日考勤数据重置完成")
 
 def admin_attendance_loop():
-    """每天早上9:00（周一到周六）/中午12:00（周日）发送上班考勤统计给管理员"""
+    """管理员考勤统计：周一到周六9:00，周日12:00（只读，不重置）"""
     while True:
         now = beijing_now()
         weekday = now.weekday()
@@ -336,6 +349,7 @@ def admin_attendance_loop():
         send_attendance_to_admin()
 
 def group_scheduler():
+    """群统计：周一到周六9:10，周日12:10（只读，不重置）"""
     while True:
         now = beijing_now()
         weekday = now.weekday()
@@ -351,11 +365,13 @@ def group_scheduler():
         time.sleep(wait_seconds)
         send_report_to_group()
 
+# 启动所有线程
 threading.Thread(target=daily_reset_loop, daemon=True).start()
 threading.Thread(target=admin_attendance_loop, daemon=True).start()
 threading.Thread(target=group_scheduler, daemon=True).start()
 
-print("✅ 考勤机器人启动 | 每天3点重置 | 每天9:00/12:00给管理员发考勤 | 每天9:10/12:10群统计")
+print("✅ 考勤机器人启动 | 每天3点重置 | 准时/迟到/缺勤完整统计")
+print(f"📌 管理员: {ADMIN_ID} | 群: {GROUP_ID_SEND}")
 
 last_id = 0
 keyboard_activated = set()
@@ -459,7 +475,6 @@ while True:
                     astart = datetime.fromisoformat(u["act_start"])
                     adur = int((now - astart).total_seconds())
                     
-                    # 保存活动时长
                     u[act + "次数"] = u.get(act + "次数", 0) + 1
                     u["act_duration"] = adur
                     u["state"] = "working"
@@ -497,7 +512,7 @@ while True:
                     send(chat_id, "\n".join(msgs), show_keyboard=True)
 
             elif cmd == "start":
-                send(chat_id, f"📋 考勤机器人\n👤 {user_name}\n🆔 {user_id}\n周一到周六9:10统计 | 周日12:10统计\n⚠️ 抽烟≤6分钟 上厕所≤16分钟 吃饭≤31分钟", show_keyboard=True)
+                send(chat_id, f"📋 考勤机器人\n👤 {user_name}\n🆔 {user_id}\n周一到周六9:10统计 | 周日12:10统计\n⚠️ 抽烟超6分钟、上厕所超16分钟、吃饭超31分钟算超时", show_keyboard=True)
 
         time.sleep(0.5)
 
