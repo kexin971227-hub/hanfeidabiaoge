@@ -15,14 +15,10 @@ BOT_TOKEN = "13243514:3DFu4gK87ZWCPu4nWdLWY21Q4mZy2DgZZBG"
 BASE_URL = f"https://api.safew.org/bot{BOT_TOKEN}"
 DATA_FILE = "data.json"
 
-# 发送对象配置
-GROUP_ID_SEND = -10000602092  # 打卡群
-ADMIN_ID = 13227717  # Ellen匪
-
-# 存储 key 使用的正数群 ID
+GROUP_ID_SEND = -10000602092
 GROUP_ID_STORE = 10000602092
+ADMIN_ID = 13227717
 
-# 超时阈值（秒）- 超过才算超时
 TIMEOUT_LIMITS = {
     "抽烟": 6 * 60,
     "上厕所": 16 * 60,
@@ -147,37 +143,8 @@ def fmt_with_timeout(activity, seconds):
         return f"{base} ⚠️ 超时 {fmt(overtime)}"
     return base
 
-def auto_repair_data():
-    if not os.path.exists(DATA_FILE):
-        return
-    with open(DATA_FILE, 'r') as f:
-        data = json.load(f)
-    if not data:
-        return
-    new_data = {}
-    repaired = 0
-    for key, val in data.items():
-        uid = None
-        if key.startswith('private_') and len(key.split('_')) >= 2:
-            uid = key.split('_')[1]
-        elif key.startswith('group_') and len(key.split('_')) >= 3:
-            uid = key.split('_')[-1]
-        if uid and uid.isdigit():
-            correct_key = f"group_{GROUP_ID_STORE}_{uid}"
-            new_data[correct_key] = val
-            if key != correct_key:
-                repaired += 1
-                print(f"🔧 修复: {key} -> {correct_key}")
-        else:
-            new_data[key] = val
-    if repaired > 0:
-        save_data(new_data)
-        print(f"✅ 自动修复 {repaired} 条记录")
-
-auto_repair_data()
-
 def get_daily_full_report(target_date):
-    """全天的详细打卡记录（包含所有活动、超时）"""
+    """只读：全天详细记录"""
     data = load_data()
     prefix = f"group_{GROUP_ID_STORE}_"
     all_activities = []
@@ -225,7 +192,7 @@ def get_daily_full_report(target_date):
     return msg
 
 def get_attendance_report(target_date):
-    """上班考勤统计（准时/迟到/缺勤）"""
+    """只读：上班考勤统计（准时/迟到/缺勤）"""
     data = load_data()
     target_dt = datetime.strptime(target_date, "%Y-%m-%d")
     target_dt = target_dt.replace(tzinfo=BEIJING_TZ)
@@ -284,21 +251,18 @@ def get_attendance_report(target_date):
     return msg
 
 def send_full_report_to_admin():
-    """凌晨3点发送全天详细记录给 Ellen匪（只读）"""
     yesterday = (beijing_now() - timedelta(days=1)).strftime("%Y-%m-%d")
     msg = get_daily_full_report(yesterday)
     send(ADMIN_ID, msg, show_keyboard=False)
     print(f"✅ 已发送全天详细记录给管理员 {ADMIN_ID}")
 
 def send_attendance_to_admin():
-    """早上9:00（周一到周六）/中午12:00（周日）发送上班考勤统计给 Ellen匪（只读）"""
     today = beijing_now().strftime("%Y-%m-%d")
     msg = get_attendance_report(today)
     send(ADMIN_ID, msg, show_keyboard=False)
     print(f"✅ 已发送上班考勤统计给管理员 {ADMIN_ID}")
 
 def send_report_to_group():
-    """群统计：周一到周六9:10，周日12:10（只读）"""
     today = beijing_now().strftime("%Y-%m-%d")
     msg = get_attendance_report(today)
     msg += "\n\n✅ 统计不影响打卡状态，无需重新打卡"
@@ -306,7 +270,6 @@ def send_report_to_group():
     print("✅ 已发送考勤统计到群组")
 
 def send_report_to_chat(chat_id):
-    """手动发送统计（只读）"""
     today = beijing_now().strftime("%Y-%m-%d")
     msg = get_attendance_report(today)
     msg += "\n\n✅ 统计不影响打卡状态，无需重新打卡"
@@ -314,7 +277,7 @@ def send_report_to_chat(chat_id):
     print(f"✅ 已发送考勤统计到 {chat_id}")
 
 def daily_reset_loop():
-    """每天凌晨3:00 重置所有数据（新的一天）"""
+    """每天凌晨3:00 重置所有数据"""
     while True:
         now = beijing_now()
         next_reset = now.replace(hour=3, minute=0, second=0, microsecond=0)
@@ -324,15 +287,11 @@ def daily_reset_loop():
         print(f"⏰ 距离下次数据重置还有 {wait_seconds/3600:.1f} 小时")
         time.sleep(wait_seconds)
         
-        # 先发送昨天的全天报告（只读）
         send_full_report_to_admin()
-        
-        # 再重置数据
         save_data({})
         print(f"✅ 每日考勤数据重置完成")
 
 def admin_attendance_loop():
-    """管理员考勤统计：周一到周六9:00，周日12:00（只读，不重置）"""
     while True:
         now = beijing_now()
         weekday = now.weekday()
@@ -349,7 +308,6 @@ def admin_attendance_loop():
         send_attendance_to_admin()
 
 def group_scheduler():
-    """群统计：周一到周六9:10，周日12:10（只读，不重置）"""
     while True:
         now = beijing_now()
         weekday = now.weekday()
@@ -365,12 +323,11 @@ def group_scheduler():
         time.sleep(wait_seconds)
         send_report_to_group()
 
-# 启动所有线程
 threading.Thread(target=daily_reset_loop, daemon=True).start()
 threading.Thread(target=admin_attendance_loop, daemon=True).start()
 threading.Thread(target=group_scheduler, daemon=True).start()
 
-print("✅ 考勤机器人启动 | 每天3点重置 | 准时/迟到/缺勤完整统计")
+print("✅ 考勤机器人启动 | 统计只读 | 每天3点重置")
 print(f"📌 管理员: {ADMIN_ID} | 群: {GROUP_ID_SEND}")
 
 last_id = 0
@@ -451,6 +408,7 @@ while True:
                     u["上班次数"] = u.get("上班次数", 0) + 1
                     db[key] = u
                     save_data(db)
+                    print(f"💾 写入打卡: {key} -> {u['work_start']}")
                     send(chat_id, f"👤 {user_name}\n🆔 {user_id}\n✅ 上班成功 {ts}\n今日第{u['上班次数']}次上班", show_keyboard=True)
 
             elif cmd in ["吃饭", "上厕所", "抽烟", "其他"]:
