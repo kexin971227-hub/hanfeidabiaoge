@@ -15,9 +15,12 @@ BOT_TOKEN = "13243514:3DFu4gK87ZWCPu4nWdLWY21Q4mZy2DgZZBG"
 BASE_URL = f"https://api.safew.org/bot{BOT_TOKEN}"
 DATA_FILE = "data.json"
 
-GROUP_ID_SEND = -10000602092
+# 发送对象配置
+GROUP_ID_SEND = -10000602092  # 打卡群
+ADMIN_ID = 13227717  # Ellen匪
+
+# 存储 key 使用的正数群 ID
 GROUP_ID_STORE = 10000602092
-ADMIN_ID = 13227717
 
 TIMEOUT_LIMITS = {
     "抽烟": 6 * 60,
@@ -122,7 +125,8 @@ def send(chat_id, text, show_keyboard=False):
         pass
 
 def get_key(chat_id, user_id):
-    if chat_id < 0:
+    """强制使用正确的 key 格式"""
+    if chat_id < 0:  # 群组
         return f"group_{abs(chat_id)}_{user_id}"
     return f"private_{user_id}"
 
@@ -143,8 +147,39 @@ def fmt_with_timeout(activity, seconds):
         return f"{base} ⚠️ 超时 {fmt(overtime)}"
     return base
 
+def auto_repair_data():
+    """修复所有 private_xxx 为 group_群ID_xxx"""
+    if not os.path.exists(DATA_FILE):
+        return
+    with open(DATA_FILE, 'r') as f:
+        data = json.load(f)
+    if not data:
+        return
+    
+    new_data = {}
+    repaired = 0
+    for key, val in data.items():
+        # 检查是否是 private_xxx 格式
+        if key.startswith('private_'):
+            uid = key.split('_')[1]
+            if uid and uid.isdigit():
+                correct_key = f"group_{GROUP_ID_STORE}_{uid}"
+                new_data[correct_key] = val
+                repaired += 1
+                print(f"🔧 修复: {key} -> {correct_key}")
+            else:
+                new_data[key] = val
+        else:
+            new_data[key] = val
+    
+    if repaired > 0:
+        save_data(new_data)
+        print(f"✅ 自动修复 {repaired} 条记录")
+
+# 启动时自动修复一次
+auto_repair_data()
+
 def get_daily_full_report(target_date):
-    """只读：全天详细记录"""
     data = load_data()
     prefix = f"group_{GROUP_ID_STORE}_"
     all_activities = []
@@ -192,7 +227,6 @@ def get_daily_full_report(target_date):
     return msg
 
 def get_attendance_report(target_date):
-    """只读：上班考勤统计（准时/迟到/缺勤）"""
     data = load_data()
     target_dt = datetime.strptime(target_date, "%Y-%m-%d")
     target_dt = target_dt.replace(tzinfo=BEIJING_TZ)
@@ -277,7 +311,6 @@ def send_report_to_chat(chat_id):
     print(f"✅ 已发送考勤统计到 {chat_id}")
 
 def daily_reset_loop():
-    """每天凌晨3:00 重置所有数据"""
     while True:
         now = beijing_now()
         next_reset = now.replace(hour=3, minute=0, second=0, microsecond=0)
@@ -327,7 +360,7 @@ threading.Thread(target=daily_reset_loop, daemon=True).start()
 threading.Thread(target=admin_attendance_loop, daemon=True).start()
 threading.Thread(target=group_scheduler, daemon=True).start()
 
-print("✅ 考勤机器人启动 | 统计只读 | 每天3点重置")
+print("✅ 考勤机器人启动 | 自动修复 key | 统计只读 | 每天3点重置")
 print(f"📌 管理员: {ADMIN_ID} | 群: {GROUP_ID_SEND}")
 
 last_id = 0
